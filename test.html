@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Math Website – Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        h1 {
+            margin-bottom: 0.5em;
+        }
+        #problem {
+            margin-bottom: 1em;
+            font-weight: bold;
+        }
+        .choice {
+            display: block;
+            margin: 0.25em 0;
+        }
+        #feedback {
+            margin: 1em 0;
+            font-weight: bold;
+        }
+        #score {
+            margin-top: 1em;
+            font-style: italic;
+        }
+    </style>
+</head>
+
+<body>
+<h1>Math Test</h1>
+<p>Answer each question and click "Check" to see if you're correct! Your score will be tracked below.</p>
+
+<div id="problem"></div>
+<div id="choices"></div>
+
+<button type="button" onclick="checkAnswer()">Check</button>
+<button type="button" onclick="nextProblem()">Next Question</button>
+
+<div id="feedback"></div>
+<div id="score"></div>
+
+<script src = 'script.js'></script>
+</body>
+</html>
