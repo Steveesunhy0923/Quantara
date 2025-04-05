@@ -1,48 +1,22 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8" />
-    <title>Math Website – Test</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
-        }
-        h1 {
-            margin-bottom: 0.5em;
-        }
-        #problem {
-            margin-bottom: 1em;
-            font-weight: bold;
-        }
-        .choice {
-            display: block;
-            margin: 0.25em 0;
-        }
-        #feedback {
-            margin: 1em 0;
-            font-weight: bold;
-        }
-        #score {
-            margin-top: 1em;
-            font-style: italic;
-        }
-    </style>
+    <title>Math Quiz</title>
+    <script type="text/javascript" id="MathJax-script" async
+            src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+    </script>
 </head>
-
 <body>
 <h1>Math Test</h1>
-<p>Answer each question and click "Check" to see if you're correct! Your score will be tracked below.</p>
+<p>Here is a sample problem:</p>
+<p id="problem"></p>
 
-<div id="problem"></div>
-<div id="choices"></div>
-
-<button type="button" onclick="checkAnswer()">Check</button>
-<button type="button" onclick="nextProblem()">Next Question</button>
-
-<div id="feedback"></div>
-<div id="score"></div>
-
-<script src = 'script.js'></script>
+<script>
+    const a = Math.floor(Math.random() * 10);
+    const b = Math.floor(Math.random() * 10);
+    const problem = document.getElementById('problem');
+    problem.textContent = `\\[ ${a} + ${b} = ? \\]`;
+    MathJax.typeset(); // This will process the LaTeX code
+</script>
 </body>
 </html>
