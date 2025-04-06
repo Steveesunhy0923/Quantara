@@ -14,7 +14,26 @@
 <script>
     const a = Math.floor(Math.random() * 10);
     const b = Math.floor(Math.random() * 10);
-    const problem = document.getElementById('problem');
+    <!DOCTYPE
+    html >
+    < html >
+    < head >
+    < title > Test
+    LaTeX
+    Rendering < /title>
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+<body>
+Here's an example of an equation:
+<p>
+    <!-- Your LaTeX math goes here -->
+    <script type="math/tex">
+        E = mc^2
+    </script>
+</p>
+</body>
+</html>
     problem.textContent = `\\[ ${a} + ${b} = ? \\]`;
     MathJax.typeset(); // This will process the LaTeX code
 </script>
