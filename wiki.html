@@ -26,14 +26,21 @@
     <script>
         // -------- Helper to map LaTeX‑like markup to simple HTML -------------
         function latexMarkupToHTML(src){
+            // Convert \begin{itemize} … \end{itemize} blocks → <ul><li> …
+            src = src.replace(/\\begin{itemize}([\s\S]*?)\\end{itemize}/g,(m,inner)=>{
+                const items = inner.split(/\\item/).filter(s=>s.trim().length);
+                return '<ul>'+items.map(s=>'<li>'+s.trim()+'</li>').join('')+'</ul>';
+            });
             return src
-                // block headings
-                .replace(/\\section\*?\{([^}]+)\}/g,"<h2>$1</h2>")
-                .replace(/\\subsection\*?\{([^}]+)\}/g,"<h3>$1</h3>")
-                .replace(/\\subsubsection\*?\{([^}]+)\}/g,"<h4>$1</h4>")
-                // line breaks
-                .replace(/\\break/g,"<br>")
-                .replace(/\\\\/g,"<br>"); // standalone \\ newline
+                .replace(/\\section\*?{([^}]+)}/g,'<h2>$1</h2>')
+                .replace(/\\subsection\*?{([^}]+)}/g,'<h3>$1</h3>')
+                .replace(/\\subsubsection\*?{([^}]+)}/g,'<h4>$1</h4>')
+                .replace(/\\break/g,'<br>')
+                // convert standalone "\\" to <br>, but keep MathJax display math intact
+                // convert a genuine LaTeX line-break “\\ ” or “\\<EOL>” to <br>,
+                // but leave commands like \times untouched
+                .replace(/\\\\(?=\\s|$)/g,'<br>');
+
         }
 
         // ------------------- In‑memory article store ------------------------
