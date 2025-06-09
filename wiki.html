@@ -4,31 +4,47 @@
     <meta charset="utf-8">
     <title>Math & Science Wiki</title>
     <style>
-        body {margin:0;font-family:system-ui, sans-serif;display:flex;flex-direction:column;height:100vh;}
-        nav#topbar {display:flex;background:#212121;color:white;padding:0.5rem 1rem;gap:1rem;}
-        nav#topbar a{color:white;text-decoration:none;padding:0.25rem 0.5rem;}
+        /* —— layout unchanged —— */
+        body{margin:0;font-family:system-ui,sans-serif;display:flex;flex-direction:column;height:100vh;}
+        nav#topbar{display:flex;background:#212121;color:#fff;padding:0.5rem 1rem;gap:1rem;}
+        nav#topbar a{color:#fff;text-decoration:none;padding:0.25rem 0.5rem;}
         nav#topbar a:hover{background:#424242;border-radius:4px;}
         #main{flex:1;display:flex;overflow:hidden;}
-        #sidebar{width:220px;background:#f3f3f3;padding:1rem;overflow-y:auto;border-right:1px solid #ddd;}
-        #sidebar h2{font-size:1rem;margin-top:0;}
-        #sidebar ul{list-style:none;padding:0;margin:0;}
-        #sidebar li{margin:0.5rem 0;}
-        #sidebar button{background:none;border:none;color:#1a73e8;cursor:pointer;font-size:0.9rem;}
-        #content{flex:1;padding:1rem;overflow-y:auto;}
-        article{max-width:65ch;line-height:1.5;}
-        article h2,article h3,article h4{margin:1.2em 0 0.5em;font-weight:600;}
-        .controls{margin-top:2rem;display:flex;gap:1rem;}
-        .controls button{padding:0.5rem 1rem;border:none;border-radius:4px;cursor:pointer;}
-        .controls button.edit{background:#ffb300;color:#000;}
-        .controls button.delete{background:#e53935;color:#fff;}
+        #sidebar{width:240px;background:#f3f3f3;padding:1rem;border-right:1px solid #ddd;display:flex;flex-direction:column;gap:1rem;overflow-y:auto;}
+        #sidebar h2{font-size:1rem;margin:0;}
+        #new-btn{display:block;padding:0.4rem 0.7rem;margin-bottom:0.5rem;border:1px solid #1a73e8;border-radius:4px;background:#1a73e8;color:#fff;cursor:pointer;font-size:0.85rem;text-align:center;}
+        #article-list{list-style:none;padding:0;margin:0;flex:1 1 auto;overflow-y:auto;}
+        #article-list li{margin:0.3rem 0;}
+        #article-list button{background:none;border:none;color:#1a73e8;text-align:left;font-size:0.9rem;width:100%;cursor:pointer;}
+        #content{flex:1;padding:1rem;overflow-y:auto;max-width:65ch;line-height:1.5;}
+        #content h2,#content h3,#content h4{margin:1.2em 0 0.5em;font-weight:600;}
+        .controls{margin-top:2rem;display:flex;gap:0.75rem;}
+        .controls button{padding:0.5rem 1rem;border:none;border-radius:4px;cursor:pointer;font-size:0.9rem;}
+        .controls .edit{background:#ffb300;color:#000;}
+        .controls .delete{background:#e53935;color:#fff;}
         textarea#editor{width:100%;height:55vh;font-family:monospace;font-size:1rem;}
     </style>
+
+    <!-- Firebase SDKs -->
+    <!-- Firebase (namespaced / compat build) -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     <script>
-        // -------- Helper to map LaTeX‑like markup to simple HTML -------------
+        // —— minimal config: include authDomain to silence localhost warning ——
+        const firebaseConfig={
+            apiKey:"AIzaSyCJTmL7fVTkf328MLSr-8je95CqtSxfMo0",
+            projectId:"quantara-1",
+            authDomain:"quantara-1.firebaseapp.com"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db=firebase.firestore();
+    </script>
+
+    <script>
+        /* ---------- helper: LaTeX→HTML ---------- */
         function latexMarkupToHTML(src){
-            // Convert \begin{itemize} … \end{itemize} blocks → <ul><li> …
-            src = src.replace(/\\begin{itemize}([\s\S]*?)\\end{itemize}/g,(m,inner)=>{
-                const items = inner.split(/\\item/).filter(s=>s.trim().length);
+            src=src.replace(/\\begin{itemize}([\s\S]*?)\\end{itemize}/g,(m,inner)=>{
+                const items=inner.split(/\\item/).filter(s=>s.trim());
                 return '<ul>'+items.map(s=>'<li>'+s.trim()+'</li>').join('')+'</ul>';
             });
             return src
@@ -36,152 +52,126 @@
                 .replace(/\\subsection\*?{([^}]+)}/g,'<h3>$1</h3>')
                 .replace(/\\subsubsection\*?{([^}]+)}/g,'<h4>$1</h4>')
                 .replace(/\\break/g,'<br>')
-                // convert standalone "\\" to <br>, but keep MathJax display math intact
-                // convert a genuine LaTeX line-break “\\ ” or “\\<EOL>” to <br>,
-                // but leave commands like \times untouched
-                .replace(/\\\\(?=\\s|$)/g,'<br>');
-
+                .replace(/\\\\(?=\s|$)/g,'<br>');
         }
 
-        // ------------------- In‑memory article store ------------------------
-        const articles = [
-            {
-                title: 'Sample Article',
-                content: `\\section*{Pythagorean Theorem}
-Given a right triangle with legs of length $a$ and $b$ and hypotenuse $c$, the well‑known identity
-\\[ a^2 + b^2 = c^2 \\]
-holds.\\\\
-\\textbf{Proof}. Consider a square of side $a+b$ and place four congruent right triangles inside it…`
-            },
-            {
-                title: 'Arithmetic',
-                content: `\\section{Arithmetic}
-Arithmetic is an elementary branch of mathematics that deals with numerical operations like addition, subtraction, multiplication, and division.
+        /* ---------- Firestore helpers with error logging ---------- */
+        let articles=[];
+        let currentIndex=0;
+        let editMode=false;
 
-\\subsection{Definition}
-Arithmetic is the fundamental operation of numbers. Although there are disagreements regarding its definition in different aspects, it is still the basis of all mathematics. Some arithmetic operations work only on certain types of numbers or mathematical properties.
-
-\\subsection{Elementary Kinds}
-\\subsubsection{Addition}
-Addition is one of the four fundamental arithmetic operations. The addition of two numbers results in the total or sum of those values combined. The operation is often represented by the symbol "+". For instance, the operation $3+5=8$ represents the addition of 5 to 3.
-\\break
-When performing addition, the numbers in the same decimal place should be added separately and put back in the same decimal place of the sum. For example, in $3.1+6.4$, we take $3+6=9$ and $0.1+0.4=0.5$ and put them back to the same place to get $9.5$.
-\\break
-When two digits add up and they exceed 10, then the decimal place in front of the original decimal place should be added by an extra 1, and put the unit digit back to the original place. For example, $19+16$ results in $35$, since $9+6=15$, and the unit digit is put back to its original place while adding an extra one to the tenth digit position. This is defined as \\textbf{carry} in addition.
-
-\\subsubsection{Subtraction}
-Subtraction is the inverse of addition. The subtraction of one number from another represents the difference between them—for example, $5-3=2$.
-\\break
-A "borrow" occurs when the minuend digit is smaller than the subtrahend digit on that decimal place. In $36-9=27$, the 6 is smaller than 9, so we borrow 1 from the tens place, treat it as $16-9=7$, and reduce the tens place accordingly.
-
-\\subsubsection{Multiplication}
-Multiplication represents repeated addition. For instance, $3 \\times 4$ means adding 3 four times: $3+3+3+3=12$. The result is called the \\textbf{product}.
-\\break
-Common symbols:
-\\begin{itemize}
-  \\item Cross: $3 \\times 4$
-  \\item Dot: $3 \\cdot 4$
-  \\item Juxtaposition: $ab$ means $a \\cdot b$
-\\end{itemize}
-\\break
-When multiplying multi‑digit numbers, multiply each digit and add the shifted partial products—for example, $23 \\times 4 = 92$.
-\\break
-Multiplication by zero gives zero: $a\\times0=0$.
-
-\\subsubsection{Division}
-Division is the inverse of multiplication. $12\\div4=3$ splits 12 into four equal parts.
-\\break
-Representations:
-\\begin{itemize}
-  \\item Division sign: $12\\div4$
-  \\item Fraction bar: $\\dfrac{12}{4}$
-  \\item Slash: $12/4$
-\\end{itemize}
-\\break
-Long division proceeds left‑to‑right, estimating how many times the divisor fits.
-\\break
-\\textbf{Important:} division by zero is undefined.
-
-\\subsection{Other properties}
-Some arithmetic operations satisfy the commutative, associative, and distributive laws.`
+        async function fetchArticles(){
+            try{
+                const snap=await db.collection('articles').orderBy('title').get();
+                articles=snap.docs.map(d=>({...d.data(),id:d.id}));
+            }catch(err){
+                console.error('Fetch failed:',err);
+                alert('Error fetching articles – check Firestore Rules or CORS console.');
             }
-        ];
+        }
 
-        let currentIndex = 0;
-        let editMode = false;
+        async function pushArticle(article){
+            try{
+                const ref=await db.collection('articles').add(article);
+                article.id=ref.id;
+            }catch(err){
+                console.error('Create failed:',err);
+                alert('Could not create article – permission issue?');
+            }
+        }
 
-        // --------------------------- UI logic ------------------------------
-        function init() {
-            const list = document.getElementById('article-list');
+        async function updateArticle(article){
+            try{
+                await db.collection('articles').doc(article.id).set({title:article.title,content:article.content});
+            }catch(err){
+                console.error('Save failed:',err);
+                alert('Save error – see console for details.');
+            }
+        }
+
+        async function deleteArticleFromDB(article){
+            try{
+                await db.collection('articles').doc(article.id).delete();
+            }catch(err){
+                console.error('Delete failed:',err);
+                alert('Delete error – check permissions.');
+            }
+        }
+
+        /* ---------- UI ---------- */
+        function buildList(){
+            const list=document.getElementById('article-list');
+            list.innerHTML='';
             articles.forEach((art,i)=>{
-                const li = document.createElement('li');
-                const btn = document.createElement('button');
-                btn.textContent = art.title;
-                btn.onclick = ()=>loadArticle(i);
+                const li=document.createElement('li');
+                const btn=document.createElement('button');
+                btn.textContent=art.title||`Untitled ${i+1}`;
+                btn.onclick=()=>loadArticle(i);
                 li.appendChild(btn);
                 list.appendChild(li);
             });
-            loadArticle(0);
         }
 
-        function loadArticle(index){
-            currentIndex = index;
-            editMode = false;
-            const cont = document.getElementById('content');
-            const htmlBody = latexMarkupToHTML(articles[index].content);
-            cont.innerHTML = `
-        <article id="article">
-          <h1>${articles[index].title}</h1>
-          <div id="article-body">${htmlBody}</div>
-          <div class="controls">
-            <button class="edit" onclick="toggleEdit()">Edit</button>
-            <button class="delete" onclick="deleteArticle()">Delete</button>
-          </div>
-        </article>`;
-            if(window.MathJax){MathJax.typesetPromise();}
+        function loadArticle(i){
+            if(i<0||i>=articles.length) return;
+            currentIndex=i;
+            editMode=false;
+            const cont=document.getElementById('content');
+            const html=latexMarkupToHTML(articles[i].content||'');
+            cont.innerHTML=`<article><h1>${articles[i].title}</h1><div id="article-body">${html}</div><div class="controls"><button class="edit" onclick="toggleEdit()">Edit</button><button class="delete" onclick="removeArticle()">Delete</button></div></article>`;
+            window.MathJax && MathJax.typesetPromise([cont]);
         }
 
-        function toggleEdit(){
-            const bodyContainer = document.getElementById('article-body');
+        async function toggleEdit(){
+            const body=document.getElementById('article-body');
+            const btn=document.querySelector('.edit');
             if(!editMode){
-                const ta = document.createElement('textarea');
-                ta.id = 'editor';
-                ta.value = articles[currentIndex].content;
-                bodyContainer.replaceWith(ta);
-                document.querySelector('.edit').textContent = 'Save';
-                editMode = true;
+                const ta=document.createElement('textarea');
+                ta.id='editor';
+                ta.value=articles[currentIndex].content||'';
+                body.replaceWith(ta);
+                btn.textContent='Save';
+                editMode=true;
             }else{
-                const newContent = document.getElementById('editor').value;
-                articles[currentIndex].content = newContent;
+                const newContent=document.getElementById('editor').value;
+                const a=articles[currentIndex];
+                a.content=newContent;
+                await updateArticle(a);
                 loadArticle(currentIndex);
             }
         }
 
-        function deleteArticle(){
+        async function removeArticle(){
             if(!confirm('Delete this article?')) return;
+            await deleteArticleFromDB(articles[currentIndex]);
             articles.splice(currentIndex,1);
-            const list = document.getElementById('article-list');
-            list.innerHTML='';
-            if(articles.length){
-                currentIndex = 0;
-                articles.forEach((_,i)=>{}); // reset just to rebuild list
-                init();
-            }else{
-                document.getElementById('content').innerHTML='<p>No articles yet.</p>';
-            }
+            buildList();
+            if(articles.length) loadArticle(0); else document.getElementById('content').textContent='No articles yet.';
+        }
+
+        async function createArticle(){
+            const title=prompt('Article title?');
+            if(!title) return;
+            const art={title,content:''};
+            await pushArticle(art);
+            articles.push(art);
+            buildList();
+            loadArticle(articles.length-1);
+            toggleEdit();
+        }
+
+        /* ---------- Init ---------- */
+        async function init(){
+            document.getElementById('new-btn').addEventListener('click',createArticle);
+            await fetchArticles();
+            buildList();
+            if(articles.length) loadArticle(0);
         }
     </script>
+
+    <!-- MathJax -->
     <script>
-        window.addEventListener('DOMContentLoaded',init);
-    </script>
-    <script>
-        window.MathJax = {
-            tex: {
-                inlineMath: [['$','$'],['\\(','\\)']],
-                displayMath: [['$$','$$'],['\\[','\\]']],
-                packages: {'[+]': ['ams']}
-            }
-        };
+        window.MathJax={tex:{inlineMath:[["$","$"],["\\(","\\)"]],displayMath:[["$$","$$"],["\\[","\\]"]],packages:{'[+]':['ams']}}};
     </script>
     <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 </head>
@@ -193,12 +183,19 @@ Some arithmetic operations satisfy the commutative, associative, and distributiv
     <a href="community.html">Community</a>
     <a href="#">Problem&nbsp;Archive</a>
 </nav>
+
 <div id="main">
     <aside id="sidebar">
         <h2>Articles</h2>
+        <button id="new-btn">+ New Article</button>
         <ul id="article-list"></ul>
     </aside>
-    <section id="content"><!-- dynamic --></section>
+
+    <section id="content"></section>
 </div>
+
+<script>
+    window.addEventListener('DOMContentLoaded',init);
+</script>
 </body>
 </html>
