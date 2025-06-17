@@ -34,30 +34,10 @@
         const db=firebase.firestore();
     </script>
 
-    <script>
-        /* ---------- helpers ---------- */
-        const slugify=s=>encodeURIComponent(s.trim().toLowerCase().replace(/\s+/g,'-'));
+    <script src="Latex_render.js"></script>
 
-        function latexMarkupToHTML(src){
-            // internal wiki links [[Target]] or [[slug|label]]
-            src=src.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g,(m,target,label)=>{
-                const slug=slugify(target);
-                const text=label||target;
-                return `<a class="wiki-link" href="#${slug}">${text}</a>`;
-            });
-            // bold
-            src=src.replace(/\\textbf{([^}]+)}/g,'<strong>$1</strong>');
-            // itemize
-            src=src.replace(/\\begin{itemize}([\s\S]*?)\\end{itemize}/g,(m,inner)=>{
-                const items=inner.split(/\\item/).filter(s=>s.trim());
-                return '<ul>'+items.map(s=>'<li>'+s.trim()+'</li>').join('')+'</ul>';});
-            return src
-                .replace(/\\section\*?{([^}]+)}/g,'<h2>$1</h2>')
-                .replace(/\\subsection\*?{([^}]+)}/g,'<h3>$1</h3>')
-                .replace(/\\subsubsection\*?{([^}]+)}/g,'<h4>$1</h4>')
-                .replace(/\\break/g,'<br>')
-                .replace(/\\\\(?=\s|$)/g,'<br>');
-        }
+
+    <script>
 
         /* ---------- Firestore helpers ---------- */
         let articles=[]; // {id,title,content,slug}
@@ -165,6 +145,9 @@
     <!-- MathJax -->
     <script>window.MathJax={tex:{inlineMath:[["$","$"],["\\(","\\)"]],displayMath:[["$$","$$"],["\\[","\\]"]],packages:{'[+]':['ams']}}};</script>
     <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <link rel="stylesheet" type="text/css" href="https://tikzjax.com/v1/fonts.css">
+    <script src="https://tikzjax.com/v1/tikzjax.js"></script>
+
 </head>
 <body>
 <nav id="topbar">
