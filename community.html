@@ -4,44 +4,37 @@
     <meta charset="UTF-8">
     <title>Community</title>
 
+    <!-- shared styles / custom feed styles -->
+    <link rel="stylesheet" href="style.css">
     <style>
-        /* —— layout unchanged —— */
-        body{margin:0;font-family:system-ui,sans-serif;display:flex;flex-direction:column;height:100vh;}
-        nav#topbar{display:flex;background:#212121;color:#fff;padding:0.5rem 1rem;gap:1rem;}
-        nav#topbar a{color:#fff;text-decoration:none;padding:0.25rem 0.5rem;}
-        nav#topbar a:hover{background:#424242;border-radius:4px;}
-        #main{flex:1;display:flex;overflow:hidden;}
-        #sidebar{width:240px;background:#f3f3f3;padding:1rem;border-right:1px solid #ddd;display:flex;flex-direction:column;gap:1rem;overflow-y:auto;}
-        #sidebar h2{font-size:1rem;margin:0;}
-        #new-btn{display:block;padding:0.4rem 0.7rem;margin-bottom:0.5rem;border:1px solid #1a73e8;border-radius:4px;background:#1a73e8;color:#fff;cursor:pointer;font-size:0.85rem;text-align:center;}
-        #article-list{list-style:none;padding:0;margin:0;flex:1 1 auto;overflow-y:auto;}
-        #article-list li{margin:0.3rem 0;}
-        #article-list button{background:none;border:none;color:#1a73e8;text-align:left;font-size:0.9rem;width:100%;cursor:pointer;}
-        #content{flex:1;padding:1rem;overflow-y:auto;max-width:65ch;line-height:1.5;}
-        #content h2,#content h3,#content h4{margin:1.2em 0 0.5em;font-weight:600;}
-        .controls{margin-top:2rem;display:flex;gap:0.75rem;}
-        .controls button{padding:0.5rem 1rem;border:none;border-radius:4px;cursor:pointer;font-size:0.9rem;}
-        .controls .edit{background:#ffb300;color:#000;}
-        .controls .delete{background:#e53935;color:#fff;}
-        textarea#editor{width:100%;height:55vh;font-family:monospace;font-size:1rem;}
+        /* simple card look so you actually see the posts */
+        .post-card{border:1px solid #ddd;border-radius:8px;padding:1rem;margin-bottom:1rem;background:#fff;max-width:60ch}
+        .post-card h3{margin:0 0 .25rem;font-size:1.1rem}
+        .post-card small{color:#666}
+        .post-body{margin-top:.5rem}
+        #sidebar{align-items:flex-start}
+        #new-post-btn{font-size:1.4rem;padding:.2rem .6rem;margin-bottom:.5rem;background:#1a73e8;color:#fff;border:none;border-radius:6px;cursor:pointer;width:100%}
+        #forum-list button{display:block;width:100%;margin:2px 0;padding:.35rem;border:none;border-radius:4px;background:#f5f5f5;text-align:left;cursor:pointer}
+        #forum-list button.active{background:#d2e3fc;font-weight:600}
     </style>
+
+    <!-- helper scripts -------------------------------------------------- -->
+    <script src="Latex_render.js"></script>
+
+    <!-- Firebase (compat) ---------------------------------------------- -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     <script>
-        function latexMarkupToHTML(src){
-            src=src.replace(/\\begin{itemize}([\s\S]*?)\\end{itemize}/g,(m,inner)=>{
-                const items=inner.split(/\\item/).filter(s=>s.trim());
-                return '<ul>'+items.map(s=>'<li>'+s.trim()+'</li>').join('')+'</ul>';
-            });
-            return src
-                .replace(/\\section\*?{([^}]+)}/g,'<h2>$1</h2>')
-                .replace(/\\subsection\*?{([^}]+)}/g,'<h3>$1</h3>')
-                .replace(/\\subsubsection\*?{([^}]+)}/g,'<h4>$1</h4>')
-                .replace(/\\break/g,'<br>')
-                .replace(/\\\\(?=\s|$)/g,'<br>');
-        }
+        const firebaseConfig={apiKey:"AIzaSyCJTmL7fVTkf328MLSr-8je95CqtSxfMo0",projectId:"quantara-1",authDomain:"quantara-1.firebaseapp.com"};
+        firebase.initializeApp(firebaseConfig);
     </script>
+
+    <!-- MathJax & TikZJax ---------------------------------------------- -->
+    <script>window.MathJax={tex:{inlineMath:[["$","$"],["\\(","\\)"]],displayMath:[["$$","$$"],["\\[","\\]"]],packages:{'[+]':['ams']}}};</script>
+    <script async id="MathJax-script" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tikzjax@1.0.4/tikzjax.min.js" defer onload="TikzJax.config({lazy:false,wasmURL:'https://cdn.jsdelivr.net/npm/tikzjax@1.0.4/tikzjax.wasm'});"></script>
 </head>
 <body>
-
 <nav id="topbar">
     <a href="#index.html">Home</a>
     <a href="wiki.html">Wiki</a>
@@ -50,17 +43,76 @@
     <a href="#">Problem&nbsp;Archive</a>
 </nav>
 
-
 <div id="main">
     <aside id="sidebar">
-        <h2>Quantara Community</h2>
-
+        <button id="new-post-btn" title="New post">＋</button>
+        <nav id="forum-list">
+            <button data-forum="">🏠 All</button>
+            <button data-forum="algebra">Algebra</button>
+            <button data-forum="geometry">Geometry</button>
+            <button data-forum="number theory">Number&nbsp;Theory</button>
+            <button data-forum="combinatorics">Combinatorics</button>
+            <button data-forum="calculus">Calculus</button>
+        </nav>
     </aside>
-
-    <section id="content">
-
-    </section>
+    <section id="content"></section>
 </div>
 
+<!-- Community feed logic (single unified listener) ------------------ -->
+<script>
+    (function(){
+        const db        = firebase.firestore();
+        const feed      = document.getElementById('content');
+        const listNav   = document.getElementById('forum-list');
+        const newBtn    = document.getElementById('new-post-btn');
+        let   forum     = "";   // selected tag ('' = all)
+        let   detach    = null;  // Firestore unsub function
+
+        /* build one post card */
+        function renderPost(doc){
+            const d     = doc.data();
+            const title = d.title || d.Title || 'Untitled';
+            const body  = d.post  || d.Post  || '';
+            const disc  = (d.discussion || d.Discussion || 'misc').toLowerCase();
+            const when  = d.time && d.time.toDate ? d.time.toDate() : new Date();
+
+            const card  = document.createElement('article');
+            card.className = 'post-card';
+            card.innerHTML = `<h3>${title}</h3>
+      <small>${disc.toUpperCase()} · ${when.toLocaleString()}</small>
+      <div class="post-body">${latexMarkupToHTML(body)}</div>`;
+            renderLatex(card);
+            feed.appendChild(card);
+        }
+
+        /* establish / re‑establish Firestore listener */
+        function listen(){
+            if(detach) detach();
+            feed.textContent = 'Loading…';
+            let ref = db.collection('communityPosts').orderBy('time','desc');
+            if(forum) ref = ref.where('discussion','==',forum);
+            detach = ref.limit(50).onSnapshot(function(qs){
+                feed.innerHTML = '';
+                qs.forEach(renderPost);
+                if(!qs.size) feed.textContent = 'No posts yet.';
+            });
+        }
+
+        /* sidebar forum buttons */
+        listNav.addEventListener('click',function(e){
+            const btn = e.target.closest('button[data-forum]');
+            if(!btn) return;
+            forum = btn.getAttribute('data-forum');
+            Array.from(listNav.children).forEach(b=>b.classList.toggle('active',b===btn));
+            listen();
+        });
+
+        /* new‑post button */
+        newBtn.addEventListener('click',() => location.href='new-post.html');
+
+        /* initial load = show all */
+        listen();
+    })();
+</script>
 </body>
 </html>

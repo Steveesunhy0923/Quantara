@@ -53,3 +53,4 @@ window.slugify          = slugify;
 window.latexMarkupToHTML = latexMarkupToHTML;
 window.renderLatex       = renderLatex;
 /* -------------------------------------------------- */
+

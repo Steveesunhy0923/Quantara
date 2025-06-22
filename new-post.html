@@ -1,0 +1,34 @@
+<!DOCTYPE html><html><head>
+    <meta charset="utf-8"><title>New Post</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+    <script>
+        firebase.initializeApp({apiKey:"AIzaSyCJTmL7fVTkf328MLSr-8je95CqtSxfMo0",
+            projectId:"quantara-1",authDomain:"quantara-1.firebaseapp.com"});
+        const db=firebase.firestore();
+    </script></head><body>
+<h2>New Post</h2>
+<form id="postForm">
+    <input  name="title" placeholder="Title" required style="width:100%;font-size:1.1rem"><br>
+    <select name="discussion" required>
+        <option value="" disabled selected>Choose forum</option>
+        <option>algebra</option><option>geometry</option><option>number theory</option>
+        <option>combinatorics</option><option>calculus</option>
+    </select><br>
+    <textarea name="post" rows="10" placeholder="Your content (LaTeX allowed)" required></textarea><br>
+    <button type="submit">Publish</button>
+</form>
+<script>
+    document.getElementById('postForm').onsubmit = async function(e){
+        e.preventDefault();
+        await db.collection('communityPosts').add({
+            title: this.title.value,
+            post:  this.post.value,
+            discussion: this.discussion.value,
+            time: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        location.href='community.html';   // go back to feed
+    };
+</script>
+</body></html>
