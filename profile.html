@@ -1,0 +1,53 @@
+<!DOCTYPE html><html><head>
+    <meta charset="utf-8"><title>Your Profile</title>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
+    <script>
+        firebase.initializeApp({
+            apiKey:"AIzaSyCJTmL7fVTkf328MLSr-8je95CqtSxfMo0",
+            projectId:"quantara-1",
+            authDomain:"quantara-1.firebaseapp.com",
+            storageBucket:"quantara-1.appspot.com"
+        });
+        const auth=firebase.auth(),db=firebase.firestore(),st=firebase.storage();
+    </script></head><body>
+<h2>Profile</h2>
+<div id="info" style="max-width:400px"></div>
+
+<script>
+    auth.onAuthStateChanged(async u=>{
+        if(!u){ location.href='login.html'; return; }
+
+        const info   = document.getElementById('info');
+        const snap   = await db.doc(`users/${u.uid}`).get();
+        const data   = snap.data()||{};
+        const url    = data.photoURL || 'https://via.placeholder.com/96';
+        const about  = data.about || '';
+
+        info.innerHTML = `
+    <img id="pic" src="${url}" style="width:96px;height:96px;border-radius:50%"><br>
+    <input id="file" type="file" accept="image/*"><br>
+    <textarea id="about" rows="5" placeholder="Say something about yourself">${about}</textarea><br>
+    <button id="saveBtn">Save</button>
+  `;
+
+        document.getElementById('saveBtn').onclick = async ()=>{
+            const newAbout = document.getElementById('about').value;
+            await db.doc(\`users/\${u.uid}\`).set({about:newAbout},{merge:true});
+    alert('Saved!');
+  };
+
+  /* upload a new photo */
+  document.getElementById('file').onchange = async e=>{
+    const file = e.target.files[0]; if(!file) return;
+    const ref  = st.ref().child(`avatars/${u.uid}`);
+    await ref.put(file);
+    const newURL = await ref.getDownloadURL();
+    await db.doc(\`users/\${u.uid}\`).set({photoURL:newURL},{merge:true});
+    document.getElementById('pic').src = newURL;
+  };
+});
+</script>
+</body></html>

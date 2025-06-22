@@ -1,0 +1,76 @@
+<!DOCTYPE html><html><head>
+    <meta charset="utf-8"><title>Login</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+    <script>
+        firebase.initializeApp({
+            apiKey:"AIzaSyCJTmL7fVTkf328MLSr-8je95CqtSxfMo0",
+            projectId:"quantara-1",
+            authDomain:"quantara-1.firebaseapp.com"
+        });
+        const auth = firebase.auth();
+        const db   = firebase.firestore();
+    </script></head><body>
+<h2>Login / Register</h2>
+
+<!-- registration form -->
+<h3>Register</h3>
+<form id="regForm">
+    <input name="regUser"     placeholder="Username" required><br>
+    <input name="regEmail"    type="email"    placeholder="Email"    required><br>
+    <input name="regPassword" type="password" placeholder="Password" required><br>
+    <button type="submit">Create account</button>
+</form>
+
+<!-- login form -->
+<h3>Login</h3>
+<form id="logForm">
+    <input name="logId"       placeholder="Username or Email" required><br>
+    <input name="logPassword" type="password" placeholder="Password" required><br>
+    <button type="submit">Login</button>
+</form>
+
+<script>
+    /* ---------- register ---------- */
+    document.getElementById('regForm').onsubmit = async e=>{
+        e.preventDefault();
+        const f = e.target;
+        try{
+            const cred = await auth.createUserWithEmailAndPassword(
+                f.regEmail.value, f.regPassword.value);
+            // store profile doc
+            await db.collection('users').doc(cred.user.uid).set({
+                username: f.regUser.value,
+                email:    f.regEmail.value,
+                joined:   firebase.firestore.FieldValue.serverTimestamp()
+            });
+            location.href='community.html';
+        }catch(err){ alert(err.message); }
+    };
+
+    /* ---------- login (email OR username) ---------- */
+    document.getElementById('logForm').onsubmit = async e=>{
+        e.preventDefault();
+        const f = e.target;
+        const id  = f.logId.value.trim();
+        const pwd = f.logPassword.value;
+        try{
+            // 1) try email directly
+            await auth.signInWithEmailAndPassword(id,pwd);
+        }catch(err){
+            if(err.code !== 'auth/invalid-email'){ alert(err.message); return; }
+            // 2) treat id as username -> look up email
+            const snap = await db.collection('users')
+                .where('username','==',id).limit(1).get();
+            if(snap.empty){ alert('Username not found'); return; }
+            const email = snap.docs[0].data().email;
+            try{
+                await auth.signInWithEmailAndPassword(email,pwd);
+            }catch(e2){ alert(e2.message); return; }
+        }
+        location.href='community.html';
+    };
+</script>
+</body></html>

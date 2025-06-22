@@ -2,15 +2,17 @@
     <meta charset="utf-8"><title>New Post</title>
     <link rel="stylesheet" href="style.css">
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     <script>
         firebase.initializeApp({apiKey:"AIzaSyCJTmL7fVTkf328MLSr-8je95CqtSxfMo0",
             projectId:"quantara-1",authDomain:"quantara-1.firebaseapp.com"});
-        const db=firebase.firestore();
+        const auth=firebase.auth(),db=firebase.firestore();
+        auth.onAuthStateChanged(u=>{if(!u) location.href='login.html';});
     </script></head><body>
 <h2>New Post</h2>
 <form id="postForm">
-    <input  name="title" placeholder="Title" required style="width:100%;font-size:1.1rem"><br>
+    <input name="title" placeholder="Title" required style="width:100%;font-size:1.1rem"><br>
     <select name="discussion" required>
         <option value="" disabled selected>Choose forum</option>
         <option>algebra</option><option>geometry</option><option>number theory</option>
@@ -20,15 +22,21 @@
     <button type="submit">Publish</button>
 </form>
 <script>
-    document.getElementById('postForm').onsubmit = async function(e){
+    document.getElementById('postForm').onsubmit=async function(e){
         e.preventDefault();
+        const u=auth.currentUser;
         await db.collection('communityPosts').add({
-            title: this.title.value,
-            post:  this.post.value,
-            discussion: this.discussion.value,
-            time: firebase.firestore.FieldValue.serverTimestamp()
+            title:this.title.value,
+            post:this.post.value,
+            discussion:this.discussion.value,
+            time:firebase.firestore.FieldValue.serverTimestamp(),
+            likes:0,
+            comments:0,
+            author:u.uid
         });
-        location.href='community.html';   // go back to feed
+        location.href='community.html';
     };
 </script>
-</body></html>
+</body>
+</html>
+

@@ -4,32 +4,35 @@
     <meta charset="UTF-8">
     <title>Community</title>
 
-    <!-- shared styles / custom feed styles -->
+    <!-- shared style sheet -->
     <link rel="stylesheet" href="style.css">
     <style>
-        /* simple card look so you actually see the posts */
         .post-card{border:1px solid #ddd;border-radius:8px;padding:1rem;margin-bottom:1rem;background:#fff;max-width:60ch}
         .post-card h3{margin:0 0 .25rem;font-size:1.1rem}
         .post-card small{color:#666}
-        .post-body{margin-top:.5rem}
+        .post-body{margin:.5rem 0}
+        .post-actions{display:flex;gap:.7rem;font-size:.9rem;color:#555}
+        .post-actions button{border:none;background:none;cursor:pointer;color:inherit}
+        .actions-right{margin-left:auto}
+
         #sidebar{align-items:flex-start}
         #new-post-btn{font-size:1.4rem;padding:.2rem .6rem;margin-bottom:.5rem;background:#1a73e8;color:#fff;border:none;border-radius:6px;cursor:pointer;width:100%}
         #forum-list button{display:block;width:100%;margin:2px 0;padding:.35rem;border:none;border-radius:4px;background:#f5f5f5;text-align:left;cursor:pointer}
         #forum-list button.active{background:#d2e3fc;font-weight:600}
     </style>
 
-    <!-- helper scripts -------------------------------------------------- -->
     <script src="Latex_render.js"></script>
 
-    <!-- Firebase (compat) ---------------------------------------------- -->
+    <!-- Firebase 9 compat (App, Auth, Firestore) -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     <script>
         const firebaseConfig={apiKey:"AIzaSyCJTmL7fVTkf328MLSr-8je95CqtSxfMo0",projectId:"quantara-1",authDomain:"quantara-1.firebaseapp.com"};
         firebase.initializeApp(firebaseConfig);
     </script>
 
-    <!-- MathJax & TikZJax ---------------------------------------------- -->
+    <!-- MathJax & TikZJax -->
     <script>window.MathJax={tex:{inlineMath:[["$","$"],["\\(","\\)"]],displayMath:[["$$","$$"],["\\[","\\]"]],packages:{'[+]':['ams']}}};</script>
     <script async id="MathJax-script" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/tikzjax@1.0.4/tikzjax.min.js" defer onload="TikzJax.config({lazy:false,wasmURL:'https://cdn.jsdelivr.net/npm/tikzjax@1.0.4/tikzjax.wasm'});"></script>
@@ -41,6 +44,9 @@
     <a href="test.html">Test</a>
     <a href="community.html">Community</a>
     <a href="#">Problem&nbsp;Archive</a>
+    <span style="margin-left:auto"></span>
+    <button id="login-btn">Login</button>
+    <button id="logout-btn" style="display:none">Logout</button>
 </nav>
 
 <div id="main">
@@ -58,59 +64,99 @@
     <section id="content"></section>
 </div>
 
-<!-- Community feed logic (single unified listener) ------------------ -->
 <script>
     (function(){
-        const db        = firebase.firestore();
+        const auth = firebase.auth();
+        const db   = firebase.firestore();
+
+        /* ---------- auth ui ----------- */
+        const loginBtn  = document.getElementById('login-btn');
+        const logoutBtn = document.getElementById('logout-btn');
+
+        loginBtn.onclick  = () => location.href='login.html';
+        logoutBtn.onclick = () => auth.signOut();
+
+        auth.onAuthStateChanged(u=>{
+            loginBtn.style.display  = u? 'none':'inline-block';
+            logoutBtn.style.display = u? 'inline-block':'none';
+        });
+
+        /* ---------- feed  ------------- */
         const feed      = document.getElementById('content');
         const listNav   = document.getElementById('forum-list');
         const newBtn    = document.getElementById('new-post-btn');
-        let   forum     = "";   // selected tag ('' = all)
-        let   detach    = null;  // Firestore unsub function
+        let   forum     = "";
+        let   detach    = null;
 
-        /* build one post card */
+        // build card (with like/comment/delete)
         function renderPost(doc){
-            const d     = doc.data();
-            const title = d.title || d.Title || 'Untitled';
-            const body  = d.post  || d.Post  || '';
-            const disc  = (d.discussion || d.Discussion || 'misc').toLowerCase();
-            const when  = d.time && d.time.toDate ? d.time.toDate() : new Date();
+            const d        = doc.data();
+            const uid      = auth.currentUser && auth.currentUser.uid;
 
-            const card  = document.createElement('article');
-            card.className = 'post-card';
-            card.innerHTML = `<h3>${title}</h3>
-      <small>${disc.toUpperCase()} · ${when.toLocaleString()}</small>
-      <div class="post-body">${latexMarkupToHTML(body)}</div>`;
+            const likes    = d.likes || 0;
+            const comments = d.comments || 0;
+            const canDel   = uid && (uid===d.author || uid==='ADMIN_UID');
+
+            const card = document.createElement('article');
+            card.className='post-card';
+            card.innerHTML = `
+      <h3>${d.title}</h3>
+      <small>${(d.discussion||'misc').toUpperCase()} · ${(d.time&&d.time.toDate?d.time.toDate():new Date()).toLocaleString()}</small>
+      <small>${d.authorName ?? 'anon'} ·
+       ${disc.toUpperCase()} · ${when.toLocaleString()}</small>
+      <div class="post-body">${latexMarkupToHTML(d.post)}</div>
+      <div class="post-actions">
+        <button class="like-btn">👍 <span>${likes}</span></button>
+        <button class="comment-btn">💬 <span>${comments}</span></button>
+        <span class="actions-right">${canDel?'<button class="del-btn">🗑️</button>':''}</span>
+      </div>`;
+
+            // Like handler
+            card.querySelector('.like-btn').onclick = async ()=>{
+                if(!auth.currentUser){alert('Login first');return;}
+                await db.runTransaction(async t=>{
+                    const snap = await t.get(doc.ref);
+                    const cur  = snap.data().likes || 0;
+                    t.update(doc.ref,{likes:cur+1});
+                });
+            };
+
+            // Delete handler
+            if(canDel){
+                card.querySelector('.del-btn').onclick = async ()=>{
+                    if(confirm('Delete this post?')) await doc.ref.delete();
+                };
+            }
+
             renderLatex(card);
             feed.appendChild(card);
         }
 
-        /* establish / re‑establish Firestore listener */
         function listen(){
             if(detach) detach();
-            feed.textContent = 'Loading…';
-            let ref = db.collection('communityPosts').orderBy('time','desc');
-            if(forum) ref = ref.where('discussion','==',forum);
-            detach = ref.limit(50).onSnapshot(function(qs){
-                feed.innerHTML = '';
+            feed.textContent='Loading…';
+            let ref=db.collection('communityPosts').orderBy('time','desc');
+            if(forum) ref=ref.where('discussion','==',forum);
+            detach=ref.limit(50).onSnapshot(qs=>{
+                feed.innerHTML='';
                 qs.forEach(renderPost);
-                if(!qs.size) feed.textContent = 'No posts yet.';
+                if(!qs.size) feed.textContent='No posts yet.';
             });
         }
 
-        /* sidebar forum buttons */
-        listNav.addEventListener('click',function(e){
-            const btn = e.target.closest('button[data-forum]');
+        listNav.addEventListener('click',e=>{
+            const btn=e.target.closest('button[data-forum]');
             if(!btn) return;
-            forum = btn.getAttribute('data-forum');
+            forum=btn.getAttribute('data-forum');
             Array.from(listNav.children).forEach(b=>b.classList.toggle('active',b===btn));
             listen();
         });
 
-        /* new‑post button */
-        newBtn.addEventListener('click',() => location.href='new-post.html');
+        newBtn.onclick = ()=>{
+            if(!auth.currentUser){alert('Please login first');return;}
+            location.href='new-post.html';
+        };
 
-        /* initial load = show all */
         listen();
     })();
 </script>
