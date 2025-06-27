@@ -45,6 +45,7 @@
     <a href="community.html">Community</a>
     <a href="#">Problem&nbsp;Archive</a>
     <span style="margin-left:auto"></span>
+    <img id="avatar" src="https://via.placeholder.com/32" alt="profile" style="width:32px;height:32px;border-radius:50%;cursor:pointer;display:none;margin-right:.5rem">
     <button id="login-btn">Login</button>
     <button id="logout-btn" style="display:none">Logout</button>
 </nav>
@@ -102,8 +103,6 @@
             card.innerHTML = `
       <h3>${d.title}</h3>
       <small>${(d.discussion||'misc').toUpperCase()} · ${(d.time&&d.time.toDate?d.time.toDate():new Date()).toLocaleString()}</small>
-      <small>${d.authorName ?? 'anon'} ·
-       ${disc.toUpperCase()} · ${when.toLocaleString()}</small>
       <div class="post-body">${latexMarkupToHTML(d.post)}</div>
       <div class="post-actions">
         <button class="like-btn">👍 <span>${likes}</span></button>
