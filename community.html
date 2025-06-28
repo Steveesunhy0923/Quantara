@@ -86,43 +86,69 @@
         const feed      = document.getElementById('content');
         const listNav   = document.getElementById('forum-list');
         const newBtn    = document.getElementById('new-post-btn');
-        let   forum     = "";
-        let   detach    = null;
+        let   forum     = "";          // current filter
+        let   detach    = null;        // Firestore listener handle
+        const userCache = new Map();   // uid → {name,photo}
 
-        // build card (with like/comment/delete)
-        function renderPost(doc){
-            const d        = doc.data();
-            const uid      = auth.currentUser && auth.currentUser.uid;
+        /* fetch user profile once and cache */
+        async function getUser(uid){
+            if(userCache.has(uid)) return userCache.get(uid);
+            const snap = await db.doc(`users/${uid}`).get();
+            const dat  = snap.exists ? snap.data() : {};
+            const res  = {
+                name : dat.username || 'anon',
+                photo: dat.photoURL || 'https://via.placeholder.com/24'
+            };
+            userCache.set(uid,res);
+            return res;
+        }
 
-            const likes    = d.likes || 0;
-            const comments = d.comments || 0;
-            const canDel   = uid && (uid===d.author || uid==='ADMIN_UID');
+        /* build post card */
+        async function renderPost(doc){
+            const d   = doc.data();
+            const uid = auth.currentUser && auth.currentUser.uid;
+            const canDel = uid && (uid===d.author || uid==='ADMIN_UID');
+
+            // author info
+            const prof = await getUser(d.author);
 
             const card = document.createElement('article');
             card.className='post-card';
-            card.innerHTML = `
+            card.innerHTML=`
+      <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.3rem">
+        <img src="${prof.photo}" data-uid="${d.author}" style="width:24px;height:24px;border-radius:50%;cursor:pointer">
+        <span class="author" data-uid="${d.author}" style="cursor:pointer">${prof.name}</span>
+      </div>
       <h3>${d.title}</h3>
       <small>${(d.discussion||'misc').toUpperCase()} · ${(d.time&&d.time.toDate?d.time.toDate():new Date()).toLocaleString()}</small>
       <div class="post-body">${latexMarkupToHTML(d.post)}</div>
       <div class="post-actions">
-        <button class="like-btn">👍 <span>${likes}</span></button>
-        <button class="comment-btn">💬 <span>${comments}</span></button>
+        <button class="like-btn">👍 <span>${d.likes||0}</span></button>
+        <button class="comment-btn">💬 <span>${d.comments||0}</span></button>
         <span class="actions-right">${canDel?'<button class="del-btn">🗑️</button>':''}</span>
       </div>`;
 
-            // Like handler
-            card.querySelector('.like-btn').onclick = async ()=>{
+            // author click → profile
+            card.querySelectorAll('[data-uid]').forEach(el=>{
+                el.onclick = e=>{
+                    const to = e.currentTarget.getAttribute('data-uid');
+                    location.href = `profile.html?uid=${to}`;
+                };
+            });
+
+            // like handler
+            card.querySelector('.like-btn').onclick=async()=>{
                 if(!auth.currentUser){alert('Login first');return;}
                 await db.runTransaction(async t=>{
-                    const snap = await t.get(doc.ref);
-                    const cur  = snap.data().likes || 0;
+                    const s=await t.get(doc.ref);
+                    const cur=s.data().likes||0;
                     t.update(doc.ref,{likes:cur+1});
                 });
             };
 
-            // Delete handler
+            // delete handler
             if(canDel){
-                card.querySelector('.del-btn').onclick = async ()=>{
+                card.querySelector('.del-btn').onclick=async()=>{
                     if(confirm('Delete this post?')) await doc.ref.delete();
                 };
             }
@@ -150,6 +176,13 @@
             Array.from(listNav.children).forEach(b=>b.classList.toggle('active',b===btn));
             listen();
         });
+
+        newBtn.onclick = ()=>{
+            if(!auth.currentUser){alert('Please login first');return;}
+            location.href='new-post.html';
+        };
+
+        listen();
 
         newBtn.onclick = ()=>{
             if(!auth.currentUser){alert('Please login first');return;}

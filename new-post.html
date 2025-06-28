@@ -25,6 +25,7 @@
     document.getElementById('postForm').onsubmit=async function(e){
         e.preventDefault();
         const u=auth.currentUser;
+        const usr= await db.doc(`users/${u.uid}`).get();
         await db.collection('communityPosts').add({
             title:this.title.value,
             post:this.post.value,
@@ -32,7 +33,9 @@
             time:firebase.firestore.FieldValue.serverTimestamp(),
             likes:0,
             comments:0,
-            author:u.uid
+            author:u.uid,
+            authorName: usr.data().username,
+            authorPhoto: usr.data().photoURL || 'https://via.placeholder.com/24'
         });
         location.href='community.html';
     };
