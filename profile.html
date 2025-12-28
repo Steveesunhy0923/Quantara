@@ -2,8 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>Your Profile</title>
-
+    <title>Profile</title>
     <!-- Firebase compat -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
@@ -18,14 +17,12 @@
         });
         const auth=firebase.auth(),db=firebase.firestore(),st=firebase.storage();
     </script>
-
     <style>
-        body{font-family:system-ui, sans-serif;max-width:500px;margin:40px auto;padding:0 1rem;}
-        h2{margin-top:0;text-align:center}
+        body{font-family:system-ui,sans-serif;max-width:500px;margin:40px auto;padding:0 1rem;}
         .center{display:flex;flex-direction:column;align-items:center}
         #pic{width:120px;height:120px;border-radius:50%;object-fit:cover;border:2px solid #ddd}
         textarea{width:100%;resize:vertical}
-        button{margin-top:0.8rem;padding:0.4rem 1.2rem;cursor:pointer}
+        button{margin-top:.8rem;padding:.4rem 1.2rem;cursor:pointer}
         label{font-size:.9rem;color:#555;margin-top:1rem}
     </style>
 </head>
@@ -38,52 +35,55 @@
     <a href="#">Problem&nbsp;Archive</a>
     <span style="margin-left:auto"></span>
     <img id="avatar" src="https://via.placeholder.com/32" alt="profile" style="width:32px;height:32px;border-radius:50%;cursor:pointer;display:none;margin-right:.5rem">
-    <button id="login-btn">Login</button>
-    <button id="logout-btn" style="display:none">Logout</button>
 </nav>
-<h2>Your Profile</h2>
+<h2 id="heading">Profile</h2>
 <div id="panel" class="center">Loading…</div>
 
 <script>
-    auth.onAuthStateChanged(async user=>{
-        if(!user){ location.href='login.html'; return; }
+    (async function(){
+        const params = new URLSearchParams(location.search);
+        const viewUid = params.get('uid');        // may be null
 
-        const wrap  = document.getElementById('panel');
-        const snap  = await db.doc(`users/${user.uid}`).get();
-        const data  = snap.data()||{};
-        const url   = data.photoURL || 'https://via.placeholder.com/120';
-        const about = data.about    || '';
+        // wait for auth ready
+        const user = await new Promise(res=>auth.onAuthStateChanged(res));
+        if(!user && !viewUid){ location.href='login.html'; return; }
 
+        const uid   = viewUid || user.uid;        // whose profile we show
+        const editable = user && user.uid === uid;
+
+        const snap = await db.doc(`users/${uid}`).get();
+        const data = snap.data()||{};
+        const url  = data.photoURL || 'https://via.placeholder.com/120';
+        const name = data.username || 'anon';
+        const about= data.about    || '';
+
+        document.getElementById('heading').textContent = name+"'s Profile";
+        const wrap=document.getElementById('panel');
         wrap.innerHTML = `
-    <img id="pic" src="${url}" alt="avatar">
-    <input id="file" type="file" accept="image/*" style="margin-top:.5rem">
-    <label for="about">About you</label>
-    <textarea id="about" rows="6" placeholder="Write a short introduction">${about}</textarea>
-    <button id="saveBtn">Save profile</button>
+     <img id="pic" src="${url}" alt="avatar">
+     ${editable?'<input id="file" type="file" accept="image/*" style="margin-top:.5rem">':''}
+     <label for="about">About</label>
+     <textarea id="about" rows="6" ${editable?'':'readonly'}>${about}</textarea>
+     ${editable?'<button id="saveBtn">Save profile</button>':''}
   `;
 
-        /* upload avatar */
-        document.getElementById('file').onchange = async e=>{
-            const f = e.target.files[0]; if(!f) return;
-            const ref = st.ref().child(`avatars/${user.uid}`);
-            await ref.put(f);
-            const newURL = await ref.getDownloadURL();
-            await db.doc(`users/${user.uid}`).set({photoURL:newURL},{merge:true});
-            document.getElementById('pic').src = newURL;
-            alert('Profile picture updated');
-        };
+        if(editable){
+            document.getElementById('file').onchange = async e=>{
+                const f=e.target.files[0]; if(!f) return;
+                const ref=st.ref().child(`avatars/${uid}`);
+                await ref.put(f);
+                const newURL=await ref.getDownloadURL();
+                await db.doc(`users/${uid}`).set({photoURL:newURL},{merge:true});
+                document.getElementById('pic').src=newURL;
+                alert('Profile picture updated');
+            };
 
-        /* save about-me */
-        document.getElementById('saveBtn').onclick = async ()=>{
-            const txt = document.getElementById('about').value;
-            await db.doc(`users/${user.uid}`).set({about:txt},{merge:true});
-            alert('Profile saved');
-        };
-    });
-
-
-    // only show file input / save button when editable === true
-
+            document.getElementById('saveBtn').onclick=async()=>{
+                await db.doc(`users/${uid}`).set({about:document.getElementById('about').value},{merge:true});
+                alert('Profile saved');
+            };
+        }
+    })();
 </script>
 </body>
 </html>

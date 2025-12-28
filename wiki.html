@@ -8,6 +8,8 @@
     <!-- Firebase compat build -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+
     <script>
         const firebaseConfig={apiKey:"AIzaSyCJTmL7fVTkf328MLSr-8je95CqtSxfMo0",projectId:"quantara-1",authDomain:"quantara-1.firebaseapp.com"};
         firebase.initializeApp(firebaseConfig);
@@ -61,10 +63,22 @@
             currentIndex=i;
             if(setHash) location.hash=articles[i].slug;
             editMode=false;
+
             const cont=document.getElementById('content');
             const html=latexMarkupToHTML(articles[i].content||'');
-            cont.innerHTML=`<article><h1>${articles[i].title}</h1><div id="article-body">${html}</div><div class="controls"><button class="edit" onclick="toggleEdit()">Edit</button><button class="delete" onclick="removeArticle()">Delete</button></div></article>`;
-            window.MathJax && MathJax.typesetPromise([cont]);
+
+            cont.innerHTML = `
+        <article>
+            <h1>${articles[i].title}</h1>
+            <div id="article-body">${html}</div>
+            <div class="controls">
+                <button class="edit" onclick="toggleEdit()">Edit</button>
+                <button class="delete" onclick="removeArticle()">Delete</button>
+            </div>
+        </article>`;
+
+            // ✅ 统一排版公式 + TikZ
+            renderLatex(cont);
         }
 
         async function toggleEdit(){
@@ -108,6 +122,30 @@
             toggleEdit();
         }
 
+        const auth = firebase.auth();
+
+        /* navbar UI */
+        auth.onAuthStateChanged(async user=>{
+            const login  = document.getElementById('loginBtn');
+            const logout = document.getElementById('logoutBtn');
+            const avatar = document.getElementById('navAvatar');
+
+            if(user){
+                login.style.display  = 'none';
+                logout.style.display = 'inline';
+                // fetch photoURL if present
+                const snap = await db.doc(`users/${user.uid}`).get();
+                const url  = (snap.exists && snap.data().photoURL) || 'https://via.placeholder.com/28';
+                avatar.src = url;   avatar.style.display='inline';
+            }else{
+                login.style.display  = 'inline';
+                logout.style.display = avatar.style.display = 'none';
+            }
+        });
+
+        document.getElementById('loginBtn').onclick = ()=> location.href='login.html';
+        document.getElementById('logoutBtn').onclick= ()=> auth.signOut();
+
         /* ---------- Init ---------- */
         async function init(){
             document.getElementById('new-btn').addEventListener('click',createArticle);
@@ -136,6 +174,12 @@
     <a href="test.html">Test</a>
     <a href="community.html">Community</a>
     <a href="#">Problem&nbsp;Archive</a>
+    <span style="margin-left:auto"></span>
+    <button id="loginBtn">Login</button>
+    <button id="logoutBtn" style="display:none">Logout</button>
+    <img id="navAvatar" src="https://via.placeholder.com/28"
+         style="width:28px;height:28px;border-radius:50%;display:none;margin-left:.5rem">
+
 </nav>
 <div id="main">
     <aside id="sidebar">

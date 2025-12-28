@@ -53,24 +53,27 @@
     /* ---------- login (email OR username) ---------- */
     document.getElementById('logForm').onsubmit = async e=>{
         e.preventDefault();
-        const f = e.target;
+        const f   = e.target;
         const id  = f.logId.value.trim();
         const pwd = f.logPassword.value;
+
         try{
-            // 1) try email directly
-            await auth.signInWithEmailAndPassword(id,pwd);
+            // If it looks like an email, try it directly
+            if (id.includes('@')) {
+                await auth.signInWithEmailAndPassword(id, pwd);
+            } else {
+                // otherwise treat it as username -> look up email
+                const snap = await db.collection('users')
+                    .where('username','==',id).limit(1).get();
+                if (snap.empty) throw new Error('Username not found');
+                const email = snap.docs[0].data().email;
+                await auth.signInWithEmailAndPassword(email, pwd);
+            }
+            location.href = 'community.html';
         }catch(err){
-            if(err.code !== 'auth/invalid-email'){ alert(err.message); return; }
-            // 2) treat id as username -> look up email
-            const snap = await db.collection('users')
-                .where('username','==',id).limit(1).get();
-            if(snap.empty){ alert('Username not found'); return; }
-            const email = snap.docs[0].data().email;
-            try{
-                await auth.signInWithEmailAndPassword(email,pwd);
-            }catch(e2){ alert(e2.message); return; }
+            alert(err.message);
         }
-        location.href='community.html';
     };
+
 </script>
 </body></html>

@@ -91,16 +91,19 @@
         const userCache = new Map();   // uid → {name,photo}
 
         /* fetch user profile once and cache */
+
         async function getUser(uid){
-            if(userCache.has(uid)) return userCache.get(uid);
+            const cached = userCache.get(uid);
+            if (cached && !cached.photo.includes('placeholder')) return cached;   // good
+
             const snap = await db.doc(`users/${uid}`).get();
             const dat  = snap.exists ? snap.data() : {};
-            const res  = {
+            const obj  = {
                 name : dat.username || 'anon',
                 photo: dat.photoURL || 'https://via.placeholder.com/24'
             };
-            userCache.set(uid,res);
-            return res;
+            userCache.set(uid, obj);
+            return obj;
         }
 
         /* build post card */
