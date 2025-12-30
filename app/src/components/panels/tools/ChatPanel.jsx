@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { addDoc, collection, deleteDoc, doc, documentId, getDoc, getDocs, limit, onSnapshot, orderBy, query, serverTimestamp, setDoc, Timestamp, updateDoc, where } from 'firebase/firestore'
-import { callCallable } from '../../../lib/callable.js'
 import { onAuthStateChanged } from 'firebase/auth'
 import { auth, db } from '../../../lib/firebase.js'
 import { resolveUidByUsername } from '../../../lib/usernames.js'
@@ -9,6 +8,8 @@ import { useNavigate } from 'react-router-dom'
 import { sendImageMessage, sendPostMessage, sendTextMessage, sendWikiMessage, uploadChatImage, uploadGroupPhoto } from '../../../lib/chat.js'
 import { callCallable } from '../../../lib/callable.js'
 import GroupAvatar from '../../chat/GroupAvatar.jsx'
+import { formatFirebaseError } from '../../../lib/errors.js'
+import { DEFAULT_AVATAR_URL } from '../../../lib/placeholders.js'
 
 function dmChatId(a, b){
   const [x, y] = [String(a), String(b)].sort()
@@ -242,7 +243,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
     )
     const unsub = onSnapshot(q, (qs)=>{
       setFriendships(qs.docs.map(d=>({ id: d.id, ...d.data() })))
-    }, (e)=>setActionErr(e?.message || String(e)))
+    }, (e)=>setActionErr(formatFirebaseError(e)))
     return ()=>unsub()
   },[user])
 
@@ -269,13 +270,13 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
       ordered,
       (qs)=>setChats(qs.docs.map(d=>({ id: d.id, ...d.data() }))),
       (err)=>{
-        const msg = err?.message || String(err)
+        const msg = formatFirebaseError(err)
         setActionErr(msg)
         unsub()
         unsub = onSnapshot(
           fallback,
           (qs)=>setChats(qs.docs.map(d=>({ id: d.id, ...d.data() }))),
-          (err2)=>setActionErr(err2?.message || String(err2))
+          (err2)=>setActionErr(formatFirebaseError(err2))
         )
       }
     )
@@ -445,7 +446,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
         pushHistory: true,
       })
     }catch(e){
-      setActionErr(e?.message || String(e))
+      setActionErr(formatFirebaseError(e))
     }
   }
 
@@ -481,7 +482,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
       })
       setAddUsername('')
     }catch(e){
-      setActionErr(e?.message || String(e))
+      setActionErr(formatFirebaseError(e))
     }
   }
 
@@ -497,7 +498,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
       setAddUsername('')
       await openThread(uid2)
     }catch(e){
-      setActionErr(e?.message || String(e))
+      setActionErr(formatFirebaseError(e))
     }
   }
 
@@ -512,7 +513,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
         updatedAt: serverTimestamp(),
       })
     }catch(e){
-      setActionErr(e?.message || String(e))
+      setActionErr(formatFirebaseError(e))
     }
   }
 
@@ -522,7 +523,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
     try{
       await deleteDoc(doc(db, 'friendships', friendshipId))
     }catch(e){
-      setActionErr(e?.message || String(e))
+      setActionErr(formatFirebaseError(e))
     }
   }
 
@@ -558,6 +559,17 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
     }
   },[chatId, mode, user])
 
+  function canWriteCurrentChat(){
+    if (!user) return { ok: false, reason: 'Login required' }
+    if (mode !== 'thread') return { ok: true }
+    if (!chatId) return { ok: false, reason: 'Missing chatId' }
+    // If the chat doc doesn't exist or we can't read it (permission-denied), `threadChat` stays null.
+    if (!threadChat) return { ok: false, reason: 'Chat not found or you no longer have access.' }
+    const ps = Array.isArray(threadChat?.participants) ? threadChat.participants.map(String) : []
+    if (!ps.includes(user.uid)) return { ok: false, reason: 'You are not a participant in this chat.' }
+    return { ok: true }
+  }
+
   useEffect(()=>{
     if (mode !== 'thread') return
     // Scroll to bottom as new messages arrive.
@@ -566,7 +578,8 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
 
   async function sendMessage(){
     setActionErr('')
-    if (!user) { setActionErr('Login required'); return }
+    const can = canWriteCurrentChat()
+    if (!can.ok) { setActionErr(can.reason || 'Not allowed'); return }
     if (!chatId) return
     const text = msgText.trim()
     if (!text) return
@@ -591,7 +604,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
         callCallable('chatMarkRead', { chatId }).catch(()=>{})
       }catch(_e){}
     }catch(e){
-      setActionErr(e?.message || String(e))
+      setActionErr(formatFirebaseError(e))
     }
   }
 
@@ -618,7 +631,8 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
 
   async function sendPendingImage(){
     setActionErr('')
-    if (!user) { setActionErr('Login required'); return }
+    const can = canWriteCurrentChat()
+    if (!can.ok) { setActionErr(can.reason || 'Not allowed'); return }
     if (!chatId) return
     if (!pendingImage?.file) return
     try{
@@ -664,16 +678,23 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
         },
       }
       if (kind === 'image'){
-        await addDoc(collection(db, 'chats', cid, 'messages'), { ...base, imageURL: String(m?.imageURL || '') })
+        const imageURL = String(m?.imageURL || '').trim()
+        if (!imageURL) throw new Error('Cannot forward: missing imageURL')
+        await addDoc(collection(db, 'chats', cid, 'messages'), { ...base, imageURL })
       } else if (kind === 'post'){
-        await addDoc(collection(db, 'chats', cid, 'messages'), { ...base, postId: String(m?.postId || ''), postTitle: String(m?.postTitle || '') })
+        const postId = String(m?.postId || '').trim()
+        if (!postId) throw new Error('Cannot forward: missing postId')
+        await addDoc(collection(db, 'chats', cid, 'messages'), { ...base, postId, postTitle: String(m?.postTitle || '').slice(0, 120) })
       } else if (kind === 'wiki'){
-        await addDoc(collection(db, 'chats', cid, 'messages'), { ...base, wikiSlug: String(m?.wikiSlug || ''), wikiTitle: String(m?.wikiTitle || '') })
+        const wikiSlug = String(m?.wikiSlug || '').trim()
+        if (!wikiSlug) throw new Error('Cannot forward: missing wikiSlug')
+        await addDoc(collection(db, 'chats', cid, 'messages'), { ...base, wikiSlug, wikiTitle: String(m?.wikiTitle || '').slice(0, 120) })
       } else {
-        await addDoc(collection(db, 'chats', cid, 'messages'), { ...base, text: String(m?.text || '') })
+        const text = String(m?.text || '').trim() || '[Forwarded message]'
+        await addDoc(collection(db, 'chats', cid, 'messages'), { ...base, text })
       }
     }catch(e){
-      setActionErr(e?.message || String(e))
+      setActionErr(formatFirebaseError(e))
     }
   }
 
@@ -693,7 +714,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
       ? (Array.isArray(threadChat?.participants) ? threadChat.participants : [])
         .filter(Boolean)
         .slice(0, 4)
-        .map(uid=>profiles[uid]?.photoURL || 'https://via.placeholder.com/36')
+        .map(uid=>profiles[uid]?.photoURL || DEFAULT_AVATAR_URL)
       : []
 
     async function onPickGroupPhoto(e){
@@ -724,7 +745,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
               <GroupAvatar urls={collageUrls} size={32} />
             )
           ) : (
-            <img src={other ? (profiles[other]?.photoURL || 'https://via.placeholder.com/32') : 'https://via.placeholder.com/32'} alt="" style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
+            <img src={other ? (profiles[other]?.photoURL || DEFAULT_AVATAR_URL) : DEFAULT_AVATAR_URL} alt="" style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
           )}
           <div style={{fontWeight:900}}>{otherName}</div>
           {isGroup && (
@@ -960,7 +981,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
                   {searchPreview.map(p=>(
                     <div key={p.uid} style={{display:'flex', alignItems:'center', gap:10, padding:'6px 6px', borderRadius:8}}>
                       <img
-                        src={p.photoURL || 'https://via.placeholder.com/28'}
+                        src={p.photoURL || DEFAULT_AVATAR_URL}
                         alt=""
                         style={{width:28,height:28,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}}
                       />
@@ -1017,7 +1038,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
                   {userPreview.map(p=>(
                     <div key={p.uid} style={{display:'flex', alignItems:'center', gap:10, padding:'6px 6px', borderRadius:8}}>
                       <img
-                        src={p.photoURL || 'https://via.placeholder.com/28'}
+                        src={p.photoURL || DEFAULT_AVATAR_URL}
                         alt=""
                         style={{width:28,height:28,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}}
                       />
@@ -1052,7 +1073,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
           <div style={{display:'flex', flexDirection:'column', gap:8}}>
             {incomingRequests.map(r=>(
               <div key={r.id} style={{display:'flex', alignItems:'center', gap:10, border:'1px solid #eee', borderRadius:10, padding:'8px 10px', background:'#fff'}}>
-                <img src={r.photoURL || 'https://via.placeholder.com/28'} alt="" style={{width:28,height:28,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
+                <img src={r.photoURL || DEFAULT_AVATAR_URL} alt="" style={{width:28,height:28,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
                 <div style={{minWidth:0}}>
                   <div style={{fontWeight:900, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{r.username || 'anon'}</div>
                   <div style={{color:'#666', fontSize:'.85rem'}}>Friend request</div>
@@ -1064,7 +1085,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
             ))}
             {outgoingRequests.map(r=>(
               <div key={r.id} style={{display:'flex', alignItems:'center', gap:10, border:'1px solid #eee', borderRadius:10, padding:'8px 10px', background:'#fff'}}>
-                <img src={r.photoURL || 'https://via.placeholder.com/28'} alt="" style={{width:28,height:28,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
+                <img src={r.photoURL || DEFAULT_AVATAR_URL} alt="" style={{width:28,height:28,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
                 <div style={{minWidth:0}}>
                   <div style={{fontWeight:900, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{r.username || 'anon'}</div>
                   <div style={{color:'#666', fontSize:'.85rem'}}>Friend request sent</div>
@@ -1112,7 +1133,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
               }}
             >
               <div style={{position:'relative'}}>
-                <img src={f.photoURL || 'https://via.placeholder.com/36'} alt="" style={{width:36,height:36,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
+                <img src={f.photoURL || DEFAULT_AVATAR_URL} alt="" style={{width:36,height:36,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
                 {/* Unread badge shown once the DM chat exists */}
                 {(() => {
                   const cid = dmChatId(user.uid, f.uid)
@@ -1237,17 +1258,39 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
               onClick={()=>openPanel('chat', { title: c.groupTitle || 'Group chat', props:{ mode:'thread', chatId: c.id }, replaceAll:false, pushHistory:true })}
               style={{display:'flex', alignItems:'center', gap:10, border:'1px solid #eee', borderRadius:10, padding:'8px 10px', background:'#fff', cursor:'pointer', textAlign:'left'}}
             >
-              {c.photoURL ? (
-                <img src={c.photoURL} alt="" style={{width:36,height:36,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
-              ) : (
-                <GroupAvatar
-                  size={36}
-                  urls={(Array.isArray(c.participants) ? c.participants : [])
-                    .filter(Boolean)
-                    .slice(0,4)
-                    .map(uid=>profiles[uid]?.photoURL || 'https://via.placeholder.com/36')}
-                />
-              )}
+              <div style={{position:'relative'}}>
+                {c.photoURL ? (
+                  <img src={c.photoURL} alt="" style={{width:36,height:36,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
+                ) : (
+                  <GroupAvatar
+                    size={36}
+                    urls={(Array.isArray(c.participants) ? c.participants : [])
+                      .filter(Boolean)
+                      .slice(0,4)
+                      .map(uid=>profiles[uid]?.photoURL || DEFAULT_AVATAR_URL)}
+                  />
+                )}
+                {!!badgeText(c.unread) && (
+                  <span style={{
+                    position:'absolute',
+                    right:-4,
+                    top:-4,
+                    minWidth:18,
+                    height:18,
+                    padding:'0 5px',
+                    borderRadius:999,
+                    background:'#e11d48',
+                    color:'#fff',
+                    fontSize:12,
+                    fontWeight:900,
+                    display:'inline-flex',
+                    alignItems:'center',
+                    justifyContent:'center',
+                    border:'2px solid #fff',
+                    lineHeight:1
+                  }}>{badgeText(c.unread)}</span>
+                )}
+              </div>
               <div style={{minWidth:0, flex:1}}>
                 <div style={{display:'flex', alignItems:'center', gap:8}}>
                   <div style={{fontWeight:900, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{c.groupTitle}</div>
@@ -1284,7 +1327,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
             style={{display:'flex', alignItems:'center', gap:10, border:'1px solid #eee', borderRadius:10, padding:'8px 10px', background:'#fff', cursor:'pointer', textAlign:'left'}}
           >
             <div style={{position:'relative'}}>
-              <img src={c.otherPhotoURL || 'https://via.placeholder.com/36'} alt="" style={{width:36,height:36,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
+              <img src={c.otherPhotoURL || DEFAULT_AVATAR_URL} alt="" style={{width:36,height:36,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
               {!!badgeText(c.unread) && (
                 <span style={{
                   position:'absolute',

@@ -6,6 +6,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { onAuthStateChanged } from 'firebase/auth'
 import { useGamification } from '../hooks/useGamification.js'
 import { adminAddAchievement, dailyCheckIn, equipBadge } from '../lib/gamification.js'
+import { DEFAULT_AVATAR_URL } from '../lib/placeholders.js'
 
 export default function Profile(){
   const params = useParams()
@@ -31,7 +32,7 @@ export default function Profile(){
       setEditable(!!user && user.uid===uid)
       const snap = await getDoc(doc(db,'users',uid))
       const data = snap.data() || {}
-      setProfile({ uid, username: data.username||'anon', about: data.about||'', photoURL: data.photoURL||'https://via.placeholder.com/120' })
+      setProfile({ uid, username: data.username||'anon', about: data.about||'', photoURL: data.photoURL||DEFAULT_AVATAR_URL })
     })()
   },[user, params.uid])
 

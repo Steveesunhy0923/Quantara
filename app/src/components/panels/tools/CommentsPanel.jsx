@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { addDoc, collection, deleteDoc, doc, getDoc, limit, onSnapshot, orderBy, query, serverTimestamp, where } from 'firebase/firestore'
+import { Timestamp, addDoc, collection, deleteDoc, doc, getDoc, limit, onSnapshot, orderBy, query, serverTimestamp, where } from 'firebase/firestore'
 import { db, auth } from '../../../lib/firebase.js'
 import { extractFirstUrl } from '../panelUtils.js'
 import { adminDeleteComment } from '../../../lib/moderation.js'
+import { formatFirebaseError } from '../../../lib/errors.js'
+import { DEFAULT_AVATAR_URL } from '../../../lib/placeholders.js'
 
 export default function CommentsPanel({ postId, postTitle }){
   const navigate = useNavigate()
@@ -90,14 +92,15 @@ export default function CommentsPanel({ postId, postTitle }){
         authorName: prof.username || auth.currentUser.displayName || 'anon',
         authorPhoto: prof.photoURL || auth.currentUser.photoURL || null,
         content,
-        timestamp: serverTimestamp(),
+        // Use a real Timestamp so Firestore rules (`timestamp is timestamp`) pass.
+        timestamp: Timestamp.now(),
         likes: 0,
         pinned: false,
       })
       setText('')
       setReplyTo(null)
     }catch(e){
-      setErr(e?.message || String(e))
+      setErr(formatFirebaseError(e))
     }
   }
 
@@ -150,7 +153,7 @@ export default function CommentsPanel({ postId, postTitle }){
                 title="View profile"
               >
                 <img
-                  src={c.authorPhoto || 'https://via.placeholder.com/24'}
+                  src={c.authorPhoto || DEFAULT_AVATAR_URL}
                   alt=""
                   style={{width:24,height:24,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}}
                 />

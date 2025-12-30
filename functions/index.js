@@ -224,6 +224,388 @@ async function deleteCommentsForPost(postId){
 }
 
 // -----------------------------
+// Users: usernames + profile helpers
+// -----------------------------
+
+function normalizeUsernameCandidate(input){
+  // Keep in sync with web constraint: /^[a-z0-9._-]{3,32}$/
+  let s = String(input || '').trim().toLowerCase()
+  if (!s) return null
+  // Convert whitespace to underscores; remove unsupported chars.
+  s = s.replace(/\s+/g, '_')
+  s = s.replace(/[^a-z0-9._-]/g, '')
+  // Collapse underscores.
+  s = s.replace(/_+/g, '_')
+  // Trim non-alnum edges so we don't end up with "___" / ".." etc.
+  s = s.replace(/^[._-]+/, '').replace(/[._-]+$/, '')
+  if (!s) return null
+  if (s.length > 32) s = s.slice(0, 32)
+  if (!/^[a-z0-9._-]{3,32}$/.test(s)) return null
+  return s
+}
+
+function randomDigits(count){
+  const n = clampInt(count, 1, 12)
+  let out = ''
+  for (let i = 0; i < n; i++){
+    out += String(Math.floor(Math.random() * 10))
+  }
+  return out
+}
+
+function truncateToLen(s, maxLen){
+  const str = String(s || '')
+  const m = clampInt(maxLen, 0, 10_000)
+  return str.length <= m ? str : str.slice(0, m)
+}
+
+async function reserveUniqueUsernameTx(tx, uid, preferredBase){
+  const base =
+    normalizeUsernameCandidate(preferredBase)
+    || 'user'
+
+  // Try a few candidates; first attempt is the base as-is, then base_######.
+  for (let i = 0; i < 40; i++){
+    const suffix = (i === 0) ? '' : `_${randomDigits(6)}`
+    const candidate = truncateToLen(base, 32 - suffix.length) + suffix
+    const unameRef = db.doc(`usernames/${candidate}`)
+    const unameSnap = await tx.get(unameRef)
+    if (!unameSnap.exists){
+      tx.set(unameRef, { uid: String(uid), createdAt: FieldValue.serverTimestamp() }, { merge: false })
+      return candidate
+    }
+  }
+
+  // Absolute fallback: user_<uidPrefix>
+  const fallback = `user_${String(uid || '').slice(0, 8).toLowerCase()}`
+  const f = normalizeUsernameCandidate(fallback) || 'user_000000'
+  const unameRef = db.doc(`usernames/${f}`)
+  const unameSnap = await tx.get(unameRef)
+  if (!unameSnap.exists){
+    tx.set(unameRef, { uid: String(uid), createdAt: FieldValue.serverTimestamp() }, { merge: false })
+    return f
+  }
+  throw new functions.https.HttpsError('resource-exhausted', 'Failed to allocate a unique username')
+}
+
+async function updateAuthorFieldsForUser(uid, patch){
+  const authorUid = String(uid || '')
+  if (!authorUid) return { postsUpdated: 0, commentsUpdated: 0 }
+  const updates = patch && typeof patch === 'object' ? patch : {}
+
+  let postsUpdated = 0
+  let commentsUpdated = 0
+
+  // communityPosts
+  {
+    const col = db.collection('communityPosts')
+    let last = null
+    for (let i = 0; i < 50; i++){
+      let q = col.where('author', '==', authorUid).orderBy(admin.firestore.FieldPath.documentId()).limit(400)
+      if (last) q = q.startAfter(last)
+      const snap = await q.get()
+      if (snap.empty) break
+      const batch = db.batch()
+      for (const d of snap.docs){
+        batch.set(d.ref, updates, { merge: true })
+        postsUpdated++
+      }
+      await batch.commit()
+      last = snap.docs[snap.docs.length - 1]
+    }
+  }
+
+  // comments
+  {
+    const col = db.collection('comments')
+    let last = null
+    for (let i = 0; i < 50; i++){
+      let q = col.where('author', '==', authorUid).orderBy(admin.firestore.FieldPath.documentId()).limit(400)
+      if (last) q = q.startAfter(last)
+      const snap = await q.get()
+      if (snap.empty) break
+      const batch = db.batch()
+      for (const d of snap.docs){
+        batch.set(d.ref, updates, { merge: true })
+        commentsUpdated++
+      }
+      await batch.commit()
+      last = snap.docs[snap.docs.length - 1]
+    }
+  }
+
+  return { postsUpdated, commentsUpdated }
+}
+
+// Ensure the user has a profile doc and a reserved username.
+// Called by the client right after Google sign-in.
+exports.userEnsureProfile = functions.https.onCall(async (_data, context) => {
+  const auth = requireAuth(context)
+  const uid = String(auth.uid || '')
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Missing uid')
+
+  const userRecord = await admin.auth().getUser(uid)
+  const displayName = String(userRecord.displayName || '')
+  const photoURL = userRecord.photoURL ? String(userRecord.photoURL) : null
+  const email = userRecord.email ? String(userRecord.email) : null
+
+  const userRef = db.doc(`users/${uid}`)
+  const out = await db.runTransaction(async (tx)=>{
+    const snap = await tx.get(userRef)
+    const existing = snap.exists ? (snap.data() || {}) : {}
+    let usernameLower = String(existing.usernameLower || existing.username || '').toLowerCase().trim()
+    let created = false
+
+    if (!usernameLower){
+      usernameLower = await reserveUniqueUsernameTx(tx, uid, displayName)
+      created = !snap.exists
+      tx.set(userRef, {
+        uid,
+        username: usernameLower,
+        usernameLower,
+        ...(email ? { email } : {}),
+        ...(photoURL ? { photoURL } : {}),
+        joined: snap.exists ? (existing.joined || FieldValue.serverTimestamp()) : FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true })
+    } else {
+      // Best-effort: ensure the username index exists for older profiles.
+      if (/^[a-z0-9._-]{3,32}$/.test(usernameLower)){
+        const unameRef = db.doc(`usernames/${usernameLower}`)
+        const unameSnap = await tx.get(unameRef)
+        if (!unameSnap.exists){
+          tx.set(unameRef, { uid, createdAt: FieldValue.serverTimestamp() }, { merge: false })
+        }
+      }
+      // Best-effort: populate photoURL/email if missing.
+      const patch = {}
+      if (email && !existing.email) patch.email = email
+      if (photoURL && !existing.photoURL) patch.photoURL = photoURL
+      patch.updatedAt = FieldValue.serverTimestamp()
+      tx.set(userRef, patch, { merge: true })
+    }
+
+    const finalPhoto = (photoURL && !existing.photoURL) ? photoURL : (existing.photoURL || photoURL || null)
+    return { ok: true, uid, username: usernameLower, photoURL: finalPhoto, created }
+  })
+
+  return out
+})
+
+exports.userResetUsernameToGoogle = functions.https.onCall(async (_data, context) => {
+  const auth = requireAuth(context)
+  const uid = String(auth.uid || '')
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Missing uid')
+
+  const userRecord = await admin.auth().getUser(uid)
+  const displayName = String(userRecord.displayName || '').trim()
+  if (!displayName){
+    throw new functions.https.HttpsError('failed-precondition', 'Your Google account is missing a display name.')
+  }
+
+  const userRef = db.doc(`users/${uid}`)
+  const res = await db.runTransaction(async (tx)=>{
+    const snap = await tx.get(userRef)
+    const existing = snap.exists ? (snap.data() || {}) : {}
+    const oldLower = String(existing.usernameLower || existing.username || '').toLowerCase().trim()
+    const nextLower = await reserveUniqueUsernameTx(tx, uid, displayName)
+
+    tx.set(userRef, {
+      uid,
+      username: nextLower,
+      usernameLower: nextLower,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true })
+
+    if (oldLower && oldLower !== nextLower && /^[a-z0-9._-]{3,32}$/.test(oldLower)){
+      const oldRef = db.doc(`usernames/${oldLower}`)
+      const oldSnap = await tx.get(oldRef)
+      if (oldSnap.exists && String(oldSnap.data()?.uid || '') === uid){
+        tx.delete(oldRef)
+      }
+    }
+
+    return { ok: true, uid, username: nextLower, oldUsername: oldLower || null }
+  })
+
+  // Update cached authorName on existing posts/comments.
+  const updated = await updateAuthorFieldsForUser(uid, { authorName: res.username })
+  return { ...res, ...updated }
+})
+
+exports.userResetPhotoToGoogle = functions.https.onCall(async (_data, context) => {
+  const auth = requireAuth(context)
+  const uid = String(auth.uid || '')
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Missing uid')
+
+  const userRecord = await admin.auth().getUser(uid)
+  const photoURL = userRecord.photoURL ? String(userRecord.photoURL) : ''
+  if (!photoURL){
+    throw new functions.https.HttpsError('failed-precondition', 'Your Google account is missing a profile photo.')
+  }
+
+  await db.doc(`users/${uid}`).set({
+    photoURL,
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true })
+
+  const updated = await updateAuthorFieldsForUser(uid, { authorPhoto: photoURL })
+  return { ok: true, uid, photoURL, ...updated }
+})
+
+// -----------------------------
+// Admin: purge legacy password users (and their posts/comments)
+// -----------------------------
+
+async function deleteDocsByAuthor(collectionName, uid){
+  const authorUid = String(uid || '')
+  if (!authorUid) return 0
+  const col = db.collection(collectionName)
+  let deleted = 0
+  let last = null
+  for (let i = 0; i < 80; i++){ // safety cap
+    let q = col.where('author', '==', authorUid).orderBy(admin.firestore.FieldPath.documentId()).limit(400)
+    if (last) q = q.startAfter(last)
+    const snap = await q.get()
+    if (snap.empty) break
+    const batch = db.batch()
+    for (const d of snap.docs){
+      batch.delete(d.ref)
+      deleted++
+    }
+    await batch.commit()
+    last = snap.docs[snap.docs.length - 1]
+  }
+  return deleted
+}
+
+async function deleteCommunityPostsByAuthor(uid){
+  const authorUid = String(uid || '')
+  if (!authorUid) return 0
+  const col = db.collection('communityPosts')
+  let deleted = 0
+  let last = null
+  for (let i = 0; i < 80; i++){ // safety cap
+    let q = col.where('author', '==', authorUid).orderBy(admin.firestore.FieldPath.documentId()).limit(200)
+    if (last) q = q.startAfter(last)
+    const snap = await q.get()
+    if (snap.empty) break
+    for (const d of snap.docs){
+      await deleteCommentsForPost(d.id)
+      await d.ref.delete()
+      deleted++
+    }
+    last = snap.docs[snap.docs.length - 1]
+  }
+  return deleted
+}
+
+exports.adminPurgePasswordUsers = functions.https.onCall(async (data, context) => {
+  await requireSteveAdmin(context)
+  const dryRun = !!data?.dryRun
+  const limit = clampInt(data?.limit, 1, 200)
+  const confirm = String(data?.confirm || '').trim()
+  if (!dryRun && confirm !== 'DELETE_PASSWORD_USERS'){
+    throw new functions.https.HttpsError('invalid-argument', 'Missing confirm="DELETE_PASSWORD_USERS"')
+  }
+
+  const candidates = []
+  let scanned = 0
+  let pageToken = undefined
+  for (let i = 0; i < 50; i++){
+    const res = await admin.auth().listUsers(1000, pageToken)
+    const users = res.users || []
+    scanned += users.length
+    for (const u of users){
+      const providers = (u.providerData || []).map(p=>String(p.providerId || '')).filter(Boolean)
+      const hasPassword = providers.includes('password')
+      const hasGoogle = providers.includes('google.com')
+      if (hasPassword && !hasGoogle){
+        candidates.push({
+          uid: u.uid,
+          email: u.email || null,
+          displayName: u.displayName || null,
+          providers,
+          createdAt: u.metadata?.creationTime || null,
+        })
+        if (candidates.length >= limit) break
+      }
+    }
+    if (candidates.length >= limit) break
+    pageToken = res.pageToken
+    if (!pageToken) break
+  }
+
+  if (dryRun){
+    // Best-effort: quick existence checks for content.
+    const details = []
+    for (const c of candidates){
+      const uid = c.uid
+      const [postSnap, commentSnap, userSnap] = await Promise.all([
+        db.collection('communityPosts').where('author', '==', uid).limit(1).get(),
+        db.collection('comments').where('author', '==', uid).limit(1).get(),
+        db.doc(`users/${uid}`).get(),
+      ])
+      details.push({
+        ...c,
+        hasPosts: !postSnap.empty,
+        hasComments: !commentSnap.empty,
+        hasUserDoc: userSnap.exists,
+        usernameLower: userSnap.exists ? (userSnap.data()?.usernameLower || userSnap.data()?.username || null) : null,
+      })
+    }
+    return { ok: true, dryRun: true, scanned, limit, candidates: details }
+  }
+
+  const totals = {
+    usersDeleted: 0,
+    authUsersDeleted: 0,
+    userDocsDeleted: 0,
+    usernameDocsDeleted: 0,
+    postsDeleted: 0,
+    commentsDeleted: 0,
+    errors: [],
+  }
+
+  for (const c of candidates){
+    const uid = String(c.uid || '')
+    if (!uid) continue
+    try{
+      // Read user doc to find usernameLower mapping.
+      const userRef = db.doc(`users/${uid}`)
+      const userSnap = await userRef.get()
+      const userData = userSnap.exists ? (userSnap.data() || {}) : {}
+      const usernameLower = String(userData.usernameLower || userData.username || '').toLowerCase().trim()
+
+      totals.postsDeleted += await deleteCommunityPostsByAuthor(uid)
+      totals.commentsDeleted += await deleteDocsByAuthor('comments', uid)
+
+      if (userSnap.exists){
+        await userRef.delete()
+        totals.userDocsDeleted++
+      }
+
+      if (usernameLower && /^[a-z0-9._-]{3,32}$/.test(usernameLower)){
+        const uref = db.doc(`usernames/${usernameLower}`)
+        const usnap = await uref.get()
+        if (usnap.exists && String(usnap.data()?.uid || '') === uid){
+          await uref.delete()
+          totals.usernameDocsDeleted++
+        }
+      }
+
+      await admin.auth().deleteUser(uid)
+      totals.authUsersDeleted++
+      totals.usersDeleted++
+    }catch(e){
+      totals.errors.push({ uid, message: e?.message || String(e) })
+    }
+  }
+
+  return { ok: true, dryRun: false, scanned, limit, totals }
+})
+
+// -----------------------------
 // Moderation (stevesunhy only)
 // -----------------------------
 
@@ -1532,14 +1914,19 @@ async function maybeUnlockLikes(uid, likesReceived){
 exports.gamificationEnsure = functions.https.onCall(async (_data, context) => {
   const auth = requireAuth(context)
   const ref = gameRefFor(auth.uid)
+  const prof = await getUserProfile(auth.uid)
+  const usernameLower = String(prof.usernameLower || prof.username || '').toLowerCase().trim()
+  const isAdmin = !!auth?.token?.admin
+  const isSteve = isAdmin && usernameLower === 'stevesunhy'
+  const minXp = isSteve ? 1000 : 0
 
   await db.runTransaction(async (tx)=>{
     const snap = await tx.get(ref)
     if (!snap.exists){
       tx.set(ref, {
         uid: auth.uid,
-        xp: 0,
-        level: 0,
+        xp: minXp,
+        level: levelFromXp(minXp),
         equippedBadgeId: '',
         postsCount: 0,
         commentsCount: 0,
@@ -1552,7 +1939,7 @@ exports.gamificationEnsure = functions.https.onCall(async (_data, context) => {
       return
     }
     const d = snap.data() || {}
-    const xp = clampInt(d.xp, 0, 2_000_000_000)
+    const xp = Math.max(clampInt(d.xp, 0, 2_000_000_000), minXp)
     const level = clampInt(d.level, 0, 1_000_000)
     tx.set(ref, {
       uid: auth.uid,

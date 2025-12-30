@@ -4,6 +4,7 @@ import { onAuthStateChanged } from 'firebase/auth'
 import { auth, db, functions } from '../../../lib/firebase.js'
 import { usePanels } from '../PanelsContext.jsx'
 import { callCallable } from '../../../lib/callable.js'
+import { DEFAULT_AVATAR_URL } from '../../../lib/placeholders.js'
 
 async function getUserBrief(uid){
   const s = await getDoc(doc(db, 'users', uid))
@@ -133,7 +134,7 @@ export default function GroupCreatePanel(){
               textAlign:'left',
             }}
           >
-            <img src={f.photoURL || 'https://via.placeholder.com/32'} alt="" style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',border:'1px solid rgba(0,0,0,.15)'}} />
+            <img src={f.photoURL || DEFAULT_AVATAR_URL} alt="" style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',border:'1px solid rgba(0,0,0,.15)'}} />
             <div style={{fontWeight:900}}>{f.username || 'anon'}</div>
             <span style={{marginLeft:'auto', fontWeight:900}}>{selectedSet.has(f.uid) ? '✓' : '+'}</span>
           </button>

@@ -5,6 +5,8 @@ import { onAuthStateChanged } from 'firebase/auth'
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { httpsCallable } from 'firebase/functions'
+import { formatFirebaseError } from '../lib/errors.js'
+import { DEFAULT_AVATAR_URL } from '../lib/placeholders.js'
 
 export default function NewPost(){
   const [user, setUser] = useState(null)
@@ -118,7 +120,7 @@ export default function NewPost(){
       starCount: 0,
       author: user.uid,
       authorName: usr.data()?.username,
-        authorPhoto: usr.data()?.photoURL || 'https://via.placeholder.com/24',
+      authorPhoto: usr.data()?.photoURL || DEFAULT_AVATAR_URL,
         hasImages: false,
       }
 
@@ -172,7 +174,7 @@ export default function NewPost(){
     if (ret) navigate(ret)
     else navigate('/community')
     }catch(e2){
-      setErr(e2?.message || String(e2))
+      setErr(formatFirebaseError(e2))
       setIsSubmitting(false)
     }
   }

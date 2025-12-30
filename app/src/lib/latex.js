@@ -3,6 +3,23 @@ export function slugify(str){
 }
 
 export function latexMarkupToHTML(src){
+  function escapeHtml(s){
+    return String(s || '')
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;')
+      .replace(/'/g,'&#39;')
+  }
+
+  function normalizeImageUrl(url){
+    url = String(url || '').trim()
+    // allow https/http or site-relative URLs; block javascript: and other schemes
+    if (/^https?:\/\//i.test(url)) return url
+    if (url.startsWith('/')) return url
+    return ''
+  }
+
   // Convert display TikZ blocks like \[ ... \begin{tikzpicture} ... \end{tikzpicture} ... \]
   src = src.replace(/\\\\\[\s*([\s\S]*?\\begin{tikzpicture}[\s\S]*?\\end{tikzpicture})\s*\\\\\]/g, (_m, tikz) => {
     return '<script type="text/tikz">\n' + tikz + '\n</script>'
@@ -22,6 +39,23 @@ export function latexMarkupToHTML(src){
     const slug = slugify(target)
     const text = label || target
     return '<a class="wiki-link" href="#'+slug+'">'+text+'</a>'
+  })
+
+  // Image macro: \imgcap{URL}{Caption text}
+  // - URL must be https://, http://, or /relative/path
+  // - Caption should not contain unmatched braces
+  src = src.replace(/\\imgcap\{([^}]+)\}\{([^}]+)\}/g, (_m, rawUrl, rawCaption) => {
+    const url = normalizeImageUrl(rawUrl)
+    if (!url) return '<!-- invalid image url -->'
+    const cap = escapeHtml(rawCaption)
+    const safeUrl = escapeHtml(url)
+    return (
+      '<figure class="wiki-figure" style="margin:1rem 0;text-align:center;">' +
+        '<img src="' + safeUrl + '" alt="' + cap + '" loading="lazy" decoding="async" ' +
+             'style="max-width:100%;height:auto;border:1px solid #ddd;background:#fff;border-radius:6px;">' +
+        '<figcaption style="margin-top:.5rem;color:#444;">' + cap + '</figcaption>' +
+      '</figure>'
+    )
   })
 
   // simple transforms

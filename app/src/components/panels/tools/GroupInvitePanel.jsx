@@ -4,6 +4,7 @@ import { onAuthStateChanged } from 'firebase/auth'
 import { auth, db, functions } from '../../../lib/firebase.js'
 import { usePanels } from '../PanelsContext.jsx'
 import { callCallable } from '../../../lib/callable.js'
+import { DEFAULT_AVATAR_URL } from '../../../lib/placeholders.js'
 
 async function getUserBrief(uid){
   const s = await getDoc(doc(db, 'users', uid))
@@ -94,7 +95,7 @@ export default function GroupInvitePanel({ chatId }){
       <div style={{display:'flex', flexDirection:'column', gap:8}}>
         {results.map(r=>(
           <div key={r.uid} style={{display:'flex', alignItems:'center', gap:10, border:'1px solid #eee', borderRadius:10, padding:'8px 10px', background:'#fff'}}>
-            <img src={r.photoURL || 'https://via.placeholder.com/32'} alt="" style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
+            <img src={r.photoURL || DEFAULT_AVATAR_URL} alt="" style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
             <div style={{fontWeight:900}}>{r.username || 'anon'}</div>
             <span style={{marginLeft:'auto'}} />
             <button type="button" onClick={()=>invite(r.uid)} disabled={!canInvite || loading}>

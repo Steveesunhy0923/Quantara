@@ -5,6 +5,8 @@ import { auth, db } from '../../../lib/firebase.js'
 import { usePanels } from '../PanelsContext.jsx'
 import { ensureDmChatWith, sendPostMessage, sendWikiMessage } from '../../../lib/chat.js'
 import GroupAvatar from '../../chat/GroupAvatar.jsx'
+import { formatFirebaseError } from '../../../lib/errors.js'
+import { DEFAULT_AVATAR_URL } from '../../../lib/placeholders.js'
 
 async function getUserBrief(uid){
   const s = await getDoc(doc(db, 'users', uid))
@@ -39,7 +41,7 @@ export default function SharePanel({ kind, postId, postTitle, wikiSlug, wikiTitl
     const q = query(collection(db, 'friendships'), where('users', 'array-contains', user.uid), limit(250))
     const unsub = onSnapshot(q, (qs)=>{
       setFriendships(qs.docs.map(d=>({ id: d.id, ...d.data() })))
-    }, (e)=>setErr(e?.message || String(e)))
+    }, (e)=>setErr(formatFirebaseError(e)))
     return ()=>unsub()
   },[user])
 
@@ -126,7 +128,7 @@ export default function SharePanel({ kind, postId, postTitle, wikiSlug, wikiTitl
       const title = `Chat: ${profiles[uid]?.username || 'anon'}`
       openPanel('chat', { title, props:{ mode:'thread', chatId: cid, otherUid: uid }, replaceAll:true, pushHistory:true })
     }catch(e){
-      setErr(e?.message || String(e))
+      setErr(formatFirebaseError(e))
     }finally{
       setSendingUid(null)
     }
@@ -147,7 +149,7 @@ export default function SharePanel({ kind, postId, postTitle, wikiSlug, wikiTitl
       const chat = groups.find(g=>g.id === chatId)
       openPanel('chat', { title: chat?.title || 'Group chat', props:{ mode:'thread', chatId }, replaceAll:true, pushHistory:true })
     }catch(e){
-      setErr(e?.message || String(e))
+      setErr(formatFirebaseError(e))
     }finally{
       setSendingChatId(null)
     }
@@ -179,7 +181,7 @@ export default function SharePanel({ kind, postId, postTitle, wikiSlug, wikiTitl
       <div style={{display:'flex', flexDirection:'column', gap:8, marginBottom:12}}>
         {friends.map(f=>(
           <div key={f.uid} style={{display:'flex', alignItems:'center', gap:10, border:'1px solid #eee', borderRadius:10, padding:'8px 10px', background:'#fff'}}>
-            <img src={f.photoURL || 'https://via.placeholder.com/32'} alt="" style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
+            <img src={f.photoURL || DEFAULT_AVATAR_URL} alt="" style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
             <div style={{minWidth:0}}>
               <div style={{fontWeight:900, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{f.username || 'anon'}</div>
               <div style={{color:'#666', fontSize:'.85rem'}}>Friend</div>
@@ -202,7 +204,7 @@ export default function SharePanel({ kind, postId, postTitle, wikiSlug, wikiTitl
             ) : (
               <GroupAvatar
                 size={32}
-                urls={(Array.isArray(g.participants) ? g.participants : []).filter(Boolean).slice(0,4).map(uid=>profiles[uid]?.photoURL || 'https://via.placeholder.com/36')}
+                urls={(Array.isArray(g.participants) ? g.participants : []).filter(Boolean).slice(0,4).map(uid=>profiles[uid]?.photoURL || DEFAULT_AVATAR_URL)}
               />
             )}
             <div style={{minWidth:0}}>

@@ -1,3 +1,5 @@
+import { DEFAULT_AVATAR_URL } from '../../lib/placeholders.js'
+
 export default function GroupAvatar({ urls = [], size = 36, borderColor = '#ddd' }){
   const pics = (Array.isArray(urls) ? urls : []).filter(Boolean).slice(0, 4)
   const grid = pics.length <= 1 ? 1 : 2
@@ -6,7 +8,7 @@ export default function GroupAvatar({ urls = [], size = 36, borderColor = '#ddd'
   if (pics.length <= 1){
     return (
       <img
-        src={pics[0] || 'https://via.placeholder.com/36'}
+        src={pics[0] || DEFAULT_AVATAR_URL}
         alt=""
         style={{width:size, height:size, borderRadius:'50%', objectFit:'cover', border:`1px solid ${borderColor}`}}
       />
@@ -28,7 +30,7 @@ export default function GroupAvatar({ urls = [], size = 36, borderColor = '#ddd'
       }}
     >
       {Array.from({ length: grid * grid }).map((_, idx)=>{
-        const src = pics[idx] || 'https://via.placeholder.com/36'
+        const src = pics[idx] || DEFAULT_AVATAR_URL
         return (
           <img
             key={idx}

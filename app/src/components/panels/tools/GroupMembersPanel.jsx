@@ -3,6 +3,7 @@ import { doc, getDoc, onSnapshot } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
 import { auth, db, functions } from '../../../lib/firebase.js'
 import { callCallable } from '../../../lib/callable.js'
+import { DEFAULT_AVATAR_URL } from '../../../lib/placeholders.js'
 
 async function getUserBrief(uid){
   const s = await getDoc(doc(db, 'users', uid))
@@ -96,7 +97,7 @@ export default function GroupMembersPanel({ chatId }){
           const canRemove = meIsAdmin && !isCreator && r.uid !== user.uid
           return (
             <div key={r.uid} style={{display:'flex', alignItems:'center', gap:10, border:'1px solid #eee', borderRadius:10, padding:'8px 10px', background:'#fff'}}>
-              <img src={r.photoURL || 'https://via.placeholder.com/32'} alt="" style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
+              <img src={r.photoURL || DEFAULT_AVATAR_URL} alt="" style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
               <div style={{minWidth:0}}>
                 <div style={{fontWeight:900, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{r.username || 'anon'}</div>
                 <div style={{color:'#666', fontSize:'.85rem'}}>{isCreator ? 'Creator' : (isAdmin ? 'Admin' : 'Member')}</div>

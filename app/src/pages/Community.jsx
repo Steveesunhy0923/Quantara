@@ -7,6 +7,9 @@ import { onAuthStateChanged } from 'firebase/auth'
 import { deleteObject, ref as storageRef } from 'firebase/storage'
 import { usePanels } from '../components/panels/PanelsContext.jsx'
 import { sendPostMessage } from '../lib/chat.js'
+import { adminDeletePost } from '../lib/moderation.js'
+import { formatFirebaseError } from '../lib/errors.js'
+import { DEFAULT_AVATAR_URL } from '../lib/placeholders.js'
 
 const BIG_CATEGORIES = ['Discussion','Q&A','Write-ups','Wiki build','Chatty']
 const DROPDOWN_CATEGORIES = new Set(['Discussion','Q&A','Write-ups','Wiki build'])
@@ -171,7 +174,7 @@ export default function Community(){
         deleted: false,
       }, { merge: true })
     }catch(e){
-      setActionErr(e?.message || String(e))
+      setActionErr(formatFirebaseError(e))
     }
   }
 
@@ -224,7 +227,7 @@ export default function Community(){
         setStarPending(prev => ({ ...prev, [p.id]: { base: Number(p.starCount || 0), delta: 1 } }))
       }
     }catch(e){
-      setActionErr(e?.message || String(e))
+      setActionErr(formatFirebaseError(e))
     }
   }
 
@@ -241,13 +244,29 @@ export default function Community(){
         await setDoc(likeRef, { createdAt: serverTimestamp() }) // like
       }
     }catch(e){
-      setActionErr(e?.message || String(e))
+      setActionErr(formatFirebaseError(e))
     }
   }
 
   async function deletePost(p){
     if (!auth.currentUser) { window.alert('Login first'); return }
-    if (auth.currentUser.uid !== p.author) { window.alert('You can only delete your own posts.'); return }
+    const mine = auth.currentUser.uid === p.author
+    if (!mine){
+      if (!isSteveAdmin){
+        window.alert('You can only delete your own posts.')
+        return
+      }
+      const reason = window.prompt('Reason for deletion (optional):', '') || ''
+      if (!window.confirm('Delete this post (admin)?')) return
+      try{
+        await adminDeletePost(p.id, reason)
+        window.alert('Post deleted (user notified).')
+      }catch(e){
+        window.alert(e?.message || String(e))
+      }
+      return
+    }
+
     if (!window.confirm('Delete this post?')) return
 
     // Best-effort cleanup of images (author-only per Storage rules)
@@ -392,6 +411,7 @@ export default function Community(){
             onToggleStar={()=>toggleStar(p)}
             isStarred={starredSet.has(p.id)}
             starPending={starPending[p.id] || null}
+            isSteveAdmin={isSteveAdmin}
             // Reddit-style: clicking 💬 or the post opens the full post view (big images + all comments)
             onOpenComments={()=>{
               closeAll()
@@ -444,7 +464,7 @@ export default function Community(){
   )
 }
 
-function PostCard({ post, onLike, onToggleStar, isStarred, starPending, onOpenComments, onOpenPost, onOpenPermalink, onDelete, onOpenImage, onSendToChat }){
+function PostCard({ post, onLike, onToggleStar, isStarred, starPending, isSteveAdmin, onOpenComments, onOpenPost, onOpenPermalink, onDelete, onOpenImage, onSendToChat }){
   const ref = useRef(null)
   const [topComments, setTopComments] = useState([])
   const [commentText, setCommentText] = useState('')
@@ -458,7 +478,7 @@ function PostCard({ post, onLike, onToggleStar, isStarred, starPending, onOpenCo
     ref.current.innerHTML = `\n      <div class="post-body">${latexMarkupToHTML(post.post||'')}</div>\n    `
     renderLatex(ref.current)
   },[post])
-  const canDelete = !!auth.currentUser && auth.currentUser.uid === post.author
+  const canDelete = !!auth.currentUser && (auth.currentUser.uid === post.author || !!isSteveAdmin)
   const canPin = !!auth.currentUser && auth.currentUser.uid === post.author
 
   useEffect(()=>{
@@ -525,7 +545,8 @@ function PostCard({ post, onLike, onToggleStar, isStarred, starPending, onOpenCo
         authorName: prof.username || auth.currentUser.displayName || 'anon',
         authorPhoto: prof.photoURL || auth.currentUser.photoURL || null,
         content,
-        timestamp: serverTimestamp(),
+        // Use a real Timestamp so Firestore rules (`timestamp is timestamp`) pass.
+        timestamp: Timestamp.now(),
         likes: 0,
         pinned: false,
       })
@@ -592,7 +613,7 @@ function PostCard({ post, onLike, onToggleStar, isStarred, starPending, onOpenCo
   return (
     <article className="post-card">
       <div style={{display:'flex',alignItems:'center',gap:'.4rem',marginBottom:'.3rem'}}>
-        <img src={post.authorPhoto||'https://via.placeholder.com/24'} style={{width:24,height:24,borderRadius:'50%'}} />
+        <img src={post.authorPhoto||DEFAULT_AVATAR_URL} style={{width:24,height:24,borderRadius:'50%'}} />
         <span className="author">{post.authorName||'anon'}</span>
       </div>
       <h3 style={{cursor:'pointer'}} onClick={onOpenPost} title="Open post">{post.title}</h3>
@@ -651,7 +672,7 @@ function PostCard({ post, onLike, onToggleStar, isStarred, starPending, onOpenCo
                     title="View profile"
                   >
                     <img
-                      src={c.authorPhoto || authorCache[c.author]?.photoURL || 'https://via.placeholder.com/24'}
+                      src={c.authorPhoto || authorCache[c.author]?.photoURL || DEFAULT_AVATAR_URL}
                       alt=""
                       style={{width:24,height:24,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}}
                     />

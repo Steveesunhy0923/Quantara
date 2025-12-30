@@ -46,56 +46,29 @@ service cloud.firestore {
       allow read: if true;
     }
 
-    // Wiki articles: only admins can create/update/delete
-    match /articles/{id} {
-      allow read: if true;
-      allow create, update, delete: if request.auth != null && request.auth.token.admin == true;
+    // -----------------------------
+    // Wiki: editable by trusted users (level >= 10)
+    // -----------------------------
+    function myLevel(){
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid)/gameState/main)
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)/gameState/main).data.level
+        : 0;
     }
 
-    // Wiki contributions: any signed-in user can submit a pending contribution to stevesunhy.
-    // Only stevesunhy (admin) can review/apply/reject.
-    match /wikiContributions/{id} {
-      allow read: if isSteveAdmin() || (isSignedIn() && resource.data.fromUid == request.auth.uid);
+    function canEditWiki(){
+      return isSignedIn()
+        && (myLevel() is int || myLevel() is float)
+        && myLevel() >= 10;
+    }
 
-      allow create: if isSignedIn()
-                    && request.resource.data.fromUid == request.auth.uid
-                    && request.resource.data.toUsername == 'stevesunhy'
-                    && request.resource.data.status == 'pending'
-                    && request.resource.data.createdAt is timestamp
-                    && request.resource.data.kind in ['new','edit']
-                    && request.resource.data.title is string
-                    && request.resource.data.title.size() > 0
-                    && request.resource.data.title.size() <= 120
-                    && request.resource.data.content is string
-                    && request.resource.data.content.size() > 0
-                    && request.resource.data.content.size() <= 80000
-                    && (!('keywords' in request.resource.data) || request.resource.data.keywords is list)
-                    && (!('articleId' in request.resource.data) || request.resource.data.articleId is string)
-                    && (!('articleSlug' in request.resource.data) || request.resource.data.articleSlug is string);
-
-      // Admin reviews: allow status transitions + metadata only.
-      allow update: if isSteveAdmin()
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                      'status','reviewedAt','reviewedBy','adminNote','appliedArticleId'
-                    ])
-                    && request.resource.data.status in ['applied','rejected']
-                    && request.resource.data.reviewedAt is timestamp
-                    && request.resource.data.reviewedBy == request.auth.uid;
-
-      allow delete: if isSteveAdmin();
+    match /articles/{id} {
+      allow read: if true;
+      allow create, update, delete: if canEditWiki();
     }
 
     // Community posts
     match /communityPosts/{postId} {
       allow read: if true;
-
-      function needsLevel(cat) {
-        return cat in ['Discussion','Q&A','Write-ups'];
-      }
-
-      function isAnnouncementPost() {
-        return request.resource.data.channel == 'announcement';
-      }
 
       // Any signed-in user can create a post where author == uid
       allow create: if request.auth != null
@@ -106,7 +79,9 @@ service cloud.firestore {
                     && request.resource.data.channel is string
                     && request.resource.data.subjects is list
                     && request.resource.data.subjects.size() >= 1
-                    && (!needsLevel(request.resource.data.bigCategory) || request.resource.data.level is string)
+                    // `level` is optional metadata used by the UI for filtering.
+                    // If present, it must be a string (legacy/alternate clients may omit it).
+                    && (!('level' in request.resource.data) || request.resource.data.level is string)
                     // Announcements are server-only (created via Cloud Functions / Admin SDK).
                     && request.resource.data.channel != 'announcement';
 

@@ -1,6 +1,6 @@
 import { httpsCallable } from 'firebase/functions'
 import { onAuthStateChanged } from 'firebase/auth'
-import { auth, functions } from './firebase.js'
+import { auth, functions, getAppCheckToken } from './firebase.js'
 
 function isHostedOrigin(){
   if (typeof window === 'undefined') return false
@@ -47,11 +47,15 @@ export async function callCallable(name, data){
   // Hosted: manual callable protocol over same-origin fetch
   const u = await waitForAuthUser(2500)
   const token = u ? await u.getIdToken(true) : null
+  // App Check is NOT automatically attached to manual fetch() calls.
+  // If Functions App Check enforcement is enabled, we must send X-Firebase-AppCheck ourselves.
+  const appCheckToken = await getAppCheckToken(false)
   const res = await fetch(`/api/${encodeURIComponent(fnName)}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(appCheckToken ? { 'X-Firebase-AppCheck': appCheckToken } : {}),
     },
     body: JSON.stringify({ data: payload }),
   })

@@ -7,8 +7,15 @@
     "deploy": "npm --prefix app run build && firebase deploy",
     "deploy:hosting": "npm --prefix app run build && firebase deploy --only hosting",
     "deploy:functions": "firebase deploy --only functions"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.1.2",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "vite": "^7.3.0"
+  },
+  "devDependencies": {
+    "firebase-tools": "^14.2.2"
   }
 }
-
-
 
