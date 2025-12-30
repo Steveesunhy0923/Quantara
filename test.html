@@ -1,23 +1,51 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Math Quiz</title>
-    <script type="text/javascript" id="MathJax-script" async
-            src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
-    </script>
-    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <meta charset="utf-8">
+  <title>Math Games · Quantara</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    main{padding:1rem;max-width:80ch;margin:0 auto}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:1rem}
+    .card{border:1px solid #ddd;border-radius:10px;background:#fff;padding:14px}
+    .card h3{margin:.1rem 0 .25rem 0}
+    .card p{margin:0 0 .9rem 0;color:#555}
+    .cta{display:inline-block;padding:.55rem .9rem;border-radius:8px;background:#1a73e8;color:#fff;text-decoration:none}
+    .cta:hover{filter:brightness(.95)}
+    .muted{color:#666}
+  </style>
 </head>
 <body>
-<h1>Math Test</h1>
-<p>Here is a sample problem:</p>
-<p id="problem"></p>
+<nav id="topbar">
+  <a href="index.html">Home</a>
+  <a href="wiki.html">Wiki</a>
+  <a href="test.html">Test</a>
+  <a href="community.html">Community</a>
+  <a href="#">Problem&nbsp;Archive</a>
+  <span style="margin-left:auto"></span>
+  <button onclick="location.href='login.html'">Login</button>
+</nav>
 
-<script>
-    const a = Math.floor(Math.random() * 10);
-    const b = Math.floor(Math.random() * 10);
-    const problem = document.getElementById('problem');
-    problem.textContent = `\\[ ${a} + ${b} = ? \\]`;
-    MathJax.typeset(); // This will process the LaTeX code
-</script>
+<main>
+  <h1>Math Games</h1>
+  <p class="muted" style="margin-top:0">Choose a game:</p>
+
+  <div class="grid">
+    <div class="card">
+      <h3>120s Arithmetic</h3>
+      <p>Answer as many arithmetic questions as possible within 2 minutes.</p>
+      <a class="cta" href="arithmetic.html">Play Arithmetic</a>
+    </div>
+    <div class="card">
+      <h3>Function Ball (Physics)</h3>
+      <p>Use functions as surfaces to guide a ball from start to finish. Gravity/mass/friction change per level.</p>
+      <a class="cta" href="function-ball.html">Play Function Ball</a>
+    </div>
+  </div>
+
+  <p class="muted" style="margin-top:1rem">
+    Note: your deployed Firebase Hosting site serves the React app under <code>app/dist</code>; I’m also adding these games there next.
+  </p>
+</main>
 </body>
 </html>

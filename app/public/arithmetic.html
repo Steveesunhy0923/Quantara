@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>120s Arithmetic · Quantara</title>
+    <link rel="stylesheet" href="/style.css">
+    <style>
+        main{padding:1rem;max-width:80ch;margin:0 auto}
+        .tabs{display:flex;gap:.5rem;margin:.5rem 0;flex-wrap:wrap}
+        .tabs button{border:1px solid #ddd;background:#f7f7f7;border-radius:6px;padding:.4rem .7rem;cursor:pointer}
+        .tabs button.active{background:#d2e3fc;border-color:#8ab4f8}
+        .controls{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;margin:.5rem 0}
+        .controls select,.controls input[type="number"]{padding:.3rem}
+        .question{font-size:1.4rem;margin:1rem 0}
+        .hidden{display:none}
+        .row{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+        .score{margin:.5rem 0;color:#333}
+        .leaderboard{margin-top:2rem}
+        .leaderboard table{border-collapse:collapse;width:100%;max-width:60ch}
+        .leaderboard th,.leaderboard td{border:1px solid #ddd;padding:.4rem;text-align:left}
+        .muted{color:#666}
+        .crumbs{margin:.25rem 0 1rem 0;color:#666}
+        .crumbs a{color:#1a73e8;text-decoration:none}
+        .crumbs a:hover{text-decoration:underline}
+    </style>
+
+    <!-- MathJax -->
+    <script>window.MathJax={tex:{inlineMath:[["$","$"],["\\(","\\)"]],displayMath:[["$$","$$"],["\\[","\\]"]],packages:{'[+]':['ams']}}};</script>
+    <script async id="MathJax-script" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+    <!-- Firebase 9 compat -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+    <script>
+        const firebaseConfig={apiKey:"AIzaSyCJTmL7fVTkf328MLSr-8je95CqtSxfMo0",projectId:"quantara-1",authDomain:"quantara-1.firebaseapp.com"};
+        firebase.initializeApp(firebaseConfig);
+    </script>
+</head>
+<body>
+<nav id="topbar">
+    <a href="/">Home</a>
+    <a href="/wiki">Wiki</a>
+    <a href="/test">Test</a>
+    <a href="/community">Community</a>
+    <a href="#">Problem&nbsp;Archive</a>
+    <span style="margin-left:auto"></span>
+    <img id="navAvatar" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28'><rect width='100%' height='100%' fill='%23ccc'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='10' fill='%23666'>?</text></svg>" alt="profile" style="width:28px;height:28px;border-radius:50%;cursor:pointer;display:none;margin-right:.5rem">
+    <button id="login-btn">Login</button>
+    <button id="logout-btn" style="display:none">Logout</button>
+</nav>
+
+<main>
+    <div class="crumbs"><a href="/test">Math Games</a> / <strong>120s Arithmetic</strong></div>
+    <h1>120s Arithmetic</h1>
+    <div class="tabs">
+        <button data-mode="timed" class="active">120s Arithmetic</button>
+        <button data-mode="rating">25-Question Rating Test</button>
+        <button data-mode="custom">Custom Practice</button>
+    </div>
+
+    <section id="setup" class="controls">
+        <label>Difficulty
+            <select id="difficulty">
+                <option value="easy">easy</option>
+                <option value="medium">medium</option>
+                <option value="hard">hard</option>
+            </select>
+        </label>
+        <label class="custom-only hidden">Operation
+            <select id="operation">
+                <option value="add">a + b</option>
+                <option value="sub">a − b</option>
+                <option value="mul">a × b</option>
+            </select>
+        </label>
+        <label class="rating-only hidden">Sections
+            <select id="section">
+                <option value="mixed">Mixed Arithmetic</option>
+                <option value="add">Addition</option>
+                <option value="sub">Subtraction</option>
+                <option value="mul">Multiplication</option>
+            </select>
+        </label>
+        <span id="help" class="muted"></span>
+        <button id="startBtn">Start</button>
+        <button id="stopBtn" class="hidden">Stop</button>
+    </section>
+
+    <section id="game" class="hidden">
+        <div class="row">
+            <div id="timer" class="muted"></div>
+            <div id="progress" class="muted"></div>
+        </div>
+        <div id="question" class="question">&nbsp;</div>
+        <div class="row">
+            <input id="answer" type="number" inputmode="numeric" placeholder="Your answer" />
+            <button id="submitBtn">Submit</button>
+            <span id="feedback" class="muted"></span>
+        </div>
+        <div id="score" class="score"></div>
+    </section>
+
+    <section class="leaderboard">
+        <h3>Leaderboard</h3>
+        <label>Mode
+            <select id="lbMode">
+                <option value="timed">120s Arithmetic</option>
+                <option value="rating">25-Question Rating Test</option>
+                <option value="custom">Custom Practice</option>
+            </select>
+        </label>
+        <div id="lbTable"></div>
+    </section>
+</main>
+
+<script>
+    (function(){
+        const auth = firebase.auth();
+        const db   = firebase.firestore();
+
+        // nav auth
+        const loginBtn  = document.getElementById('login-btn');
+        const logoutBtn = document.getElementById('logout-btn');
+        if (loginBtn)  loginBtn.onclick  = ()=> location.href='/login';
+        if (logoutBtn) logoutBtn.onclick = ()=> auth.signOut();
+        auth.onAuthStateChanged(async u=>{
+            const img = document.getElementById('navAvatar');
+            if (u && img){
+                try{
+                    const s = await db.doc(`users/${u.uid}`).get();
+                    const url = (s.exists && s.data().photoURL) || img.src;
+                    img.src = url; img.style.display='inline-block';
+                    img.onclick = ()=> location.href = `/profile?uid=${u.uid}`;
+                }catch(e){ img.style.display='inline-block'; img.onclick = ()=> location.href = `/profile?uid=${u.uid}`; }
+            }else if(img){ img.style.display='none'; }
+        });
+
+        // UI elements
+        const tabs     = document.querySelectorAll('.tabs button');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn  = document.getElementById('stopBtn');
+        const help     = document.getElementById('help');
+        const diffSel  = document.getElementById('difficulty');
+        const opSel    = document.getElementById('operation');
+        const secSel   = document.getElementById('section');
+        const gameSec  = document.getElementById('game');
+        const timerEl  = document.getElementById('timer');
+        const progress = document.getElementById('progress');
+        const qEl      = document.getElementById('question');
+        const ansEl    = document.getElementById('answer');
+        const submit   = document.getElementById('submitBtn');
+        const feedback = document.getElementById('feedback');
+        const scoreEl  = document.getElementById('score');
+        const lbMode   = document.getElementById('lbMode');
+        const lbTable  = document.getElementById('lbTable');
+
+        let currentMode = 'timed';
+        let running     = false;
+        let attemptRef  = null;
+        let startedAt   = null;
+        let timerId     = null;
+        let remaining   = 0;
+        let total       = 0;
+        let correct     = 0;
+
+        const templates = [
+            { key:'add', text:"\\[ a + b = ? \\]", kind:'add', eval:(a,b)=>a+b },
+            { key:'sub', text:"\\[ a - b = ? \\]", kind:'sub', eval:(a,b)=>a-b },
+            { key:'mul', text:"\\[ a \\times b = ? \\]", kind:'mul', eval:(a,b)=>a*b },
+        ];
+
+        function pickTemplate(mode){
+            if (mode==='custom') return templates.find(t=>t.key===opSel.value) || templates[0];
+            if (mode==='rating'){
+                const sec = secSel.value;
+                if (sec==='mixed') return templates[Math.floor(Math.random()*templates.length)];
+                return templates.find(t=>t.key===sec) || templates[0];
+            }
+            return templates[Math.floor(Math.random()*templates.length)];
+        }
+
+        function rangeForDifficulty(){
+            const d = diffSel.value;
+            if (d==='easy')   return [0,9];
+            if (d==='medium') return [10,99];
+            return [12,199];
+        }
+
+        function genAB(kind){
+            const [lo,hi] = rangeForDifficulty();
+            let a = rnd(lo,hi), b = rnd(lo,hi);
+            if (kind==='sub' && diffSel.value!=='hard' && a<b){ const t=a;a=b;b=t; }
+            return {a,b};
+        }
+
+        function rnd(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+        function renderTeX(templateText, params){
+            return templateText.replace(/a/g, String(params.a)).replace(/b/g, String(params.b));
+        }
+
+        function setMode(mode){
+            currentMode = mode;
+            tabs.forEach(b=>b.classList.toggle('active', b.getAttribute('data-mode')===mode));
+            document.querySelectorAll('.custom-only').forEach(el=>el.classList.toggle('hidden', mode!=='custom'));
+            document.querySelectorAll('.rating-only').forEach(el=>el.classList.toggle('hidden', mode!=='rating'));
+            help.textContent = mode==='timed' ? '120 seconds to answer as many as possible.'
+                              : mode==='rating' ? '25 problems; each correct is 4 points.'
+                              : 'Pick an operation and practice at your pace.';
+        }
+
+        tabs.forEach(btn=>btn.onclick=()=> setMode(btn.getAttribute('data-mode')));
+
+        async function ensureUser(){
+            return new Promise(res=>{
+                auth.onAuthStateChanged(u=>{
+                    if (!u){ alert('Please login first'); location.href='/login'; }
+                    res(u);
+                });
+            });
+        }
+
+        function startTimer(seconds){
+            remaining = seconds;
+            timerEl.textContent = `${remaining}s`;
+            clearInterval(timerId);
+            timerId = setInterval(()=>{
+                remaining--; timerEl.textContent = `${remaining}s`;
+                if (remaining<=0){ clearInterval(timerId); finalizeAttempt(); }
+            },1000);
+        }
+
+        function stopTimer(){ clearInterval(timerId); timerId=null; timerEl.textContent=''; }
+
+        function updateScore(){
+            scoreEl.textContent = `Score: ${correct} / ${total}`;
+            if (currentMode==='rating'){
+                const rating = correct*4;
+                scoreEl.textContent += ` · Rating: ${rating}`;
+            }
+        }
+
+        async function newAttempt(){
+            const u = await ensureUser();
+            const base = {
+                uid: u.uid,
+                mode: currentMode,
+                difficulty: diffSel.value,
+                section: currentMode==='rating'? secSel.value : null,
+                startedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                endedAt: null,
+                score: 0,
+                total: 0,
+                correct: 0,
+                rating: null
+            };
+            const ref = await db.collection('gameAttempts').add(base);
+            return ref;
+        }
+
+        async function addItem(ref, record){
+            await ref.collection('items').add(record);
+        }
+
+        function nextQuestion(){
+            const t = pickTemplate(currentMode);
+            const {a,b} = genAB(t.kind);
+            const correctAns = t.eval(a,b);
+            const tex = renderTeX(t.text, {a,b});
+            qEl.textContent = tex;
+            window.MathJax && MathJax.typesetPromise && MathJax.typesetPromise([qEl]);
+            feedback.textContent='';
+            ansEl.value='';
+            ansEl.focus();
+            qEl._current = { templateKey: t.key, templateText: t.text, params:{a,b}, correctAnswer: correctAns };
+        }
+
+        async function submitAnswer(){
+            if (!running) return;
+            const cur = qEl._current; if (!cur) return;
+            const val = ansEl.value.trim(); if (!val) return;
+            const userAns = Number(val);
+            total += 1;
+            const isCorrect = userAns === cur.correctAnswer;
+            if (isCorrect) correct += 1;
+            feedback.textContent = isCorrect ? 'Correct' : `Incorrect (ans = ${cur.correctAnswer})`;
+            updateScore();
+
+            if (attemptRef){
+                const sinceStartMs = Date.now() - startedAt;
+                await addItem(attemptRef, {
+                    templateKey: cur.templateKey,
+                    templateText: cur.templateText,
+                    params: cur.params,
+                    userAnswer: userAns,
+                    correct: isCorrect,
+                    elapsedMs: sinceStartMs
+                });
+            }
+
+            if (currentMode==='rating' && total>=25){
+                finalizeAttempt();
+                return;
+            }
+            nextQuestion();
+        }
+
+        async function finalizeAttempt(){
+            if (!running) return;
+            running=false;
+            stopTimer();
+            startBtn.classList.remove('hidden');
+            stopBtn.classList.add('hidden');
+            ansEl.disabled=true; submit.disabled=true;
+            const rating = currentMode==='rating' ? correct*4 : null;
+            progress.textContent='';
+            if (attemptRef){
+                try{
+                    await attemptRef.update({
+                        endedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                        score: correct,
+                        total: total,
+                        correct: correct,
+                        rating: rating
+                    });
+                }catch(e){ /* ignore */ }
+            }
+            loadLeaderboard();
+        }
+
+        startBtn.onclick = async ()=>{
+            await ensureUser();
+            running=true;
+            total=0; correct=0; updateScore();
+            feedback.textContent='';
+            startedAt = Date.now();
+            attemptRef = await newAttempt();
+            startBtn.classList.add('hidden');
+            stopBtn.classList.remove('hidden');
+            gameSec.classList.remove('hidden');
+            ansEl.disabled=false; submit.disabled=false;
+            if (currentMode==='timed'){ startTimer(120); progress.textContent=''; }
+            if (currentMode==='rating'){ stopTimer(); progress.textContent='25 questions'; }
+            if (currentMode==='custom'){ stopTimer(); progress.textContent='Practice mode'; }
+            nextQuestion();
+        };
+
+        stopBtn.onclick = ()=> finalizeAttempt();
+        submit.onclick  = ()=> submitAnswer();
+        ansEl.addEventListener('keydown', e=>{ if (e.key==='Enter') submitAnswer(); });
+
+        function fmtUser(u){ return u?.username || 'anon'; }
+
+        async function loadLeaderboard(){
+            const mode = lbMode.value;
+            lbTable.textContent = 'Loading…';
+
+            // Avoid composite indexes by filtering client-side.
+            const base = db.collection('gameAttempts');
+            const q = (mode === 'rating')
+              ? base.orderBy('rating','desc').limit(50)
+              : base.orderBy('score','desc').limit(50);
+
+            const snap = await q.get().catch(()=>null);
+            if (!snap){ lbTable.textContent = 'Leaderboard unavailable.'; return; }
+
+            const filtered = [];
+            for (const doc of snap.docs){
+                const d = doc.data();
+                if (!d) continue;
+                if (!d.endedAt) continue;
+                if ((d.mode || null) !== mode) continue;
+                filtered.push(d);
+                if (filtered.length >= 10) break;
+            }
+
+            const userDocs = await Promise.all(
+              filtered.map(d => db.doc(`users/${d.uid}`).get().then(s=>s.data()).catch(()=>null))
+            );
+
+            const rows = filtered.map((d, idx) => {
+              const u = userDocs[idx];
+              return {
+                name: fmtUser(u),
+                score: d.score || 0,
+                rating: d.rating || null,
+                when: d.endedAt?.toDate?.() || new Date()
+              };
+            });
+
+            const html = [
+                '<table><thead><tr>',
+                '<th>#</th><th>User</th>',
+                mode==='rating' ? '<th>Rating</th>' : '<th>Score</th>',
+                '<th>When</th>',
+                '</tr></thead><tbody>',
+                ...rows.map((r,i)=>`<tr><td>${i+1}</td><td>${r.name}</td><td>${mode==='rating'? (r.rating||0) : (r.score||0)}</td><td>${new Date(r.when).toLocaleString()}</td></tr>`),
+                '</tbody></table>'
+            ].join('');
+            lbTable.innerHTML = html;
+        }
+
+        lbMode.onchange = loadLeaderboard;
+
+        setMode('timed');
+        loadLeaderboard();
+    })();
+</script>
+</body>
+</html>
+
+
+
+

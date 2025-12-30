@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+  <meta charset="utf-8"><title>Admin Claim</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-functions-compat.js"></script>
+  <script>
+    firebase.initializeApp({
+      apiKey: "AIzaSyCJTmL7fVTkf328MLSr-8je95CqtSxfMo0",
+      projectId: "quantara-1",
+      authDomain: "quantara-1.firebaseapp.com"
+    });
+    const auth = firebase.auth();
+    const fn   = firebase.app().functions('us-central1');
+  </script>
+</head>
+<body>
+  <h2>Grant Admin to Self</h2>
+  <p>Login, then enter the one-time server secret to grant your account admin.</p>
+  <div>
+    <input id="pwd" type="password" placeholder="Admin secret">
+    <button id="btn">Set Admin</button>
+  </div>
+  <script>
+    document.getElementById('btn').onclick = async () => {
+      const user = auth.currentUser;
+      if (!user) { alert('Please login first'); return }
+      try{
+        const callable = fn.httpsCallable('setAdmin');
+        const res = await callable({ password: document.getElementById('pwd').value });
+        await user.getIdToken(true);
+        alert('Admin claim granted');
+      }catch(e){ alert(e.message || e); }
+    };
+  </script>
+</body></html>
+
+

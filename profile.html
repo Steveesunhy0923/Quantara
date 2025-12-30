@@ -13,22 +13,28 @@
             apiKey:"AIzaSyCJTmL7fVTkf328MLSr-8je95CqtSxfMo0",
             projectId:"quantara-1",
             authDomain:"quantara-1.firebaseapp.com",
-            storageBucket:"quantara-1.appspot.com"
+            storageBucket:"quantara-1.firebasestorage.app"
         });
         const auth=firebase.auth(),db=firebase.firestore(),st=firebase.storage();
     </script>
+    <link rel="stylesheet" href="avatar-picker.css">
     <style>
-        body{font-family:system-ui,sans-serif;max-width:500px;margin:40px auto;padding:0 1rem;}
-        .center{display:flex;flex-direction:column;align-items:center}
-        #pic{width:120px;height:120px;border-radius:50%;object-fit:cover;border:2px solid #ddd}
-        textarea{width:100%;resize:vertical}
-        button{margin-top:.8rem;padding:.4rem 1.2rem;cursor:pointer}
-        label{font-size:.9rem;color:#555;margin-top:1rem}
+        body{font-family:system-ui,sans-serif;margin:0}
+        #container{max-width:960px;margin:32px auto;padding:0 16px}
+        #top{display:grid;grid-template-columns:160px 1fr;gap:20px;align-items:start}
+        #pic{width:160px;height:160px;border-radius:50%;object-fit:cover;border:2px solid #ddd;background:#f2f2f2}
+        #meta h1{margin:0 0 8px;font-size:1.8rem}
+        #meta .sub{color:#666;margin-bottom:12px}
+        #meta textarea{width:100%;min-height:120px;resize:vertical}
+        #meta button{margin-top:.6rem;padding:.4rem 1.0rem;cursor:pointer}
+        #bottom{margin-top:32px;min-height:240px;border-top:1px solid #eee;padding-top:16px;color:#777}
+        nav#topbar{display:flex;background:#212121;color:#fff;padding:.5rem 1rem;gap:1rem}
+        nav#topbar a{color:#fff;text-decoration:none}
     </style>
 </head>
 <body>
 <nav id="topbar">
-    <a href="#index.html">Home</a>
+    <a href="index.html">Home</a>
     <a href="wiki.html">Wiki</a>
     <a href="test.html">Test</a>
     <a href="community.html">Community</a>
@@ -36,15 +42,47 @@
     <span style="margin-left:auto"></span>
     <img id="avatar" src="https://via.placeholder.com/32" alt="profile" style="width:32px;height:32px;border-radius:50%;cursor:pointer;display:none;margin-right:.5rem">
 </nav>
-<h2 id="heading">Profile</h2>
-<div id="panel" class="center">Loading…</div>
+<div id="container">
+  <div id="top">
+    <img id="pic" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><rect width='100%' height='100%' fill='%23eee'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='20' fill='%23999'>Avatar</text></svg>" alt="avatar">
+    <div id="meta">
+      <h1 id="username">User</h1>
+      <div class="sub" id="userid">&nbsp;</div>
+      <label for="about">About</label>
+      <textarea id="about" rows="6"></textarea>
+      <div id="actions"></div>
+    </div>
+  </div>
+  <div id="bottom">More profile content coming soon…</div>
+  </div>
 
+<script src="avatar-picker.js"></script>
 <script>
     (async function(){
         const params = new URLSearchParams(location.search);
         const viewUid = params.get('uid');        // may be null
 
-        // wait for auth ready
+        // navbar avatar: show and click to current user's profile
+        (function initTopbarAvatar(){
+            const img = document.getElementById('avatar');
+            if(!img) return;
+            auth.onAuthStateChanged(async u=>{
+                if(u){
+                    try{
+                        const s = await db.doc(`users/${u.uid}`).get();
+                        const url = (s.exists && s.data().photoURL) || img.src;
+                        img.src = url;
+                    }catch(e){}
+                    img.style.display='inline-block';
+                    img.onclick = ()=> location.href = `profile.html?uid=${u.uid}`;
+                }else{
+                    img.style.display='none';
+                    img.onclick = null;
+                }
+            });
+        })();
+
+        // wait for auth ready for page permissions
         const user = await new Promise(res=>auth.onAuthStateChanged(res));
         if(!user && !viewUid){ location.href='login.html'; return; }
 
@@ -53,31 +91,39 @@
 
         const snap = await db.doc(`users/${uid}`).get();
         const data = snap.data()||{};
-        const url  = data.photoURL || 'https://via.placeholder.com/120';
+        const url  = data.photoURL || '';
         const name = data.username || 'anon';
         const about= data.about    || '';
 
-        document.getElementById('heading').textContent = name+"'s Profile";
-        const wrap=document.getElementById('panel');
-        wrap.innerHTML = `
-     <img id="pic" src="${url}" alt="avatar">
-     ${editable?'<input id="file" type="file" accept="image/*" style="margin-top:.5rem">':''}
-     <label for="about">About</label>
-     <textarea id="about" rows="6" ${editable?'':'readonly'}>${about}</textarea>
-     ${editable?'<button id="saveBtn">Save profile</button>':''}
-  `;
+        document.getElementById('username').textContent = name;
+        document.getElementById('userid').textContent = `@${uid.slice(0,6)}…`;
+        const picEl = document.getElementById('pic');
+        if(url) picEl.src = url;
+        picEl.onerror = ()=>{ picEl.src = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><rect width='100%' height='100%' fill='%23eee'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='20' fill='%23999'>Avatar</text></svg>"; };
+        const aboutEl = document.getElementById('about');
+        aboutEl.value = about;
+        if(!editable) aboutEl.setAttribute('readonly','');
+        const actions = document.getElementById('actions');
 
         if(editable){
-            document.getElementById('file').onchange = async e=>{
-                const f=e.target.files[0]; if(!f) return;
-                const ref=st.ref().child(`avatars/${uid}`);
-                await ref.put(f);
-                const newURL=await ref.getDownloadURL();
-                await db.doc(`users/${uid}`).set({photoURL:newURL},{merge:true});
-                document.getElementById('pic').src=newURL;
-                alert('Profile picture updated');
-            };
+            const pickerWrap = document.createElement('div');
+            actions.appendChild(pickerWrap);
+            AvatarPicker.create(pickerWrap, {
+                initialUrl: url,
+                onChange: async (newUrl, meta)=>{
+                    try{
+                        await db.doc(`users/${uid}`).set({ photoURL: newUrl, avatarKey: meta.id||null, avatarHex: meta.hex||null }, { merge:true });
+                        picEl.src = newUrl;
+                    }catch(e){ alert(e.message||e); }
+                }
+            });
 
+            const saveBtn = document.createElement('button');
+            saveBtn.id='saveBtn'; saveBtn.textContent='Save profile';
+            actions.appendChild(saveBtn);
+        }
+
+        if(editable){
             document.getElementById('saveBtn').onclick=async()=>{
                 await db.doc(`users/${uid}`).set({about:document.getElementById('about').value},{merge:true});
                 alert('Profile saved');

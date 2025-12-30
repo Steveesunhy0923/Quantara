@@ -32,20 +32,29 @@
         firebase.initializeApp(firebaseConfig);
     </script>
 
-    <!-- MathJax & TikZJax -->
+    <!-- MathJax -->
     <script>window.MathJax={tex:{inlineMath:[["$","$"],["\\(","\\)"]],displayMath:[["$$","$$"],["\\[","\\]"]],packages:{'[+]':['ams']}}};</script>
     <script async id="MathJax-script" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/tikzjax@1.0.4/tikzjax.min.js" defer onload="TikzJax.config({lazy:false,wasmURL:'https://cdn.jsdelivr.net/npm/tikzjax@1.0.4/tikzjax.wasm'});"></script>
+    <!-- TikZ rendering removed on community; MathJax only -->
 </head>
 <body>
+<script>
+  // This repo now has a React Community page at `/community`.
+  // If you're seeing this legacy page in a hosted environment, redirect to the React route.
+  (function(){
+    if (location.protocol !== 'file:') {
+      location.replace('/community');
+    }
+  })();
+</script>
 <nav id="topbar">
-    <a href="#index.html">Home</a>
-    <a href="wiki.html">Wiki</a>
-    <a href="test.html">Test</a>
-    <a href="community.html">Community</a>
+    <a href="/">Home</a>
+    <a href="/wiki">Wiki</a>
+    <a href="/test">Test</a>
+    <a href="/community">Community</a>
     <a href="#">Problem&nbsp;Archive</a>
     <span style="margin-left:auto"></span>
-    <img id="avatar" src="https://via.placeholder.com/32" alt="profile" style="width:32px;height:32px;border-radius:50%;cursor:pointer;display:none;margin-right:.5rem">
+    <img id="navAvatar" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28'><rect width='100%' height='100%' fill='%23ccc'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='10' fill='%23666'>?</text></svg>" alt="profile" style="width:28px;height:28px;border-radius:50%;cursor:pointer;display:none;margin-right:.5rem">
     <button id="login-btn">Login</button>
     <button id="logout-btn" style="display:none">Logout</button>
 </nav>
@@ -66,7 +75,7 @@
 </div>
 
 <script>
-    (function(){
+    window.addEventListener('DOMContentLoaded', function(){
         const auth = firebase.auth();
         const db   = firebase.firestore();
 
@@ -74,12 +83,32 @@
         const loginBtn  = document.getElementById('login-btn');
         const logoutBtn = document.getElementById('logout-btn');
 
-        loginBtn.onclick  = () => location.href='login.html';
-        logoutBtn.onclick = () => auth.signOut();
+        if (loginBtn)  loginBtn.onclick  = () => location.href='login.html';
+        if (logoutBtn) logoutBtn.onclick = () => auth.signOut();
 
-        auth.onAuthStateChanged(u=>{
-            loginBtn.style.display  = u? 'none':'inline-block';
-            logoutBtn.style.display = u? 'inline-block':'none';
+        let isAdmin = false; // moved before listener to avoid TDZ errors
+
+        // init navbar avatar and admin toggle
+        auth.onAuthStateChanged(async u=>{
+            const img = document.getElementById('navAvatar');
+            if (u && img){
+                try{
+                    const snap = await db.doc(`users/${u.uid}`).get();
+                    const url  = (snap.exists && snap.data().photoURL) || img.src;
+                    img.src = url; img.style.display='inline-block';
+                    img.onclick = ()=> location.href = `profile.html?uid=${u.uid}`;
+                }catch(e){ img.style.display='inline-block'; img.onclick = ()=> location.href = `profile.html?uid=${u.uid}`; }
+            }else if(img){
+                img.style.display='none';
+            }
+
+            let admin=false;
+            if (u){
+                try{ const tok = await u.getIdTokenResult(true); admin = !!tok.claims.admin; }catch(e){}
+            }
+            const prev = isAdmin;
+            isAdmin = admin;
+            if (prev !== isAdmin) listen();
         });
 
         /* ---------- feed  ------------- */
@@ -90,29 +119,20 @@
         let   detach    = null;        // Firestore listener handle
         const userCache = new Map();   // uid → {name,photo}
 
-        /* fetch user profile once and cache */
-
         async function getUser(uid){
             const cached = userCache.get(uid);
-            if (cached && !cached.photo.includes('placeholder')) return cached;   // good
-
+            if (cached && !cached.photo.includes('placeholder')) return cached;
             const snap = await db.doc(`users/${uid}`).get();
             const dat  = snap.exists ? snap.data() : {};
-            const obj  = {
-                name : dat.username || 'anon',
-                photo: dat.photoURL || 'https://via.placeholder.com/24'
-            };
+            const obj  = { name: dat.username || 'anon', photo: dat.photoURL || 'data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'24\' height=\'24\'><rect width=\'100%\' height=\'100%\' fill=\'%23ccc\'/><text x=\'50%\' y=\'50%\' dominant-baseline=\'middle\' text-anchor=\'middle\' font-size=\'9\' fill=\'%23666\'>?</text></svg>' };
             userCache.set(uid, obj);
             return obj;
         }
 
-        /* build post card */
         async function renderPost(doc){
             const d   = doc.data();
             const uid = auth.currentUser && auth.currentUser.uid;
-            const canDel = uid && (uid===d.author || uid==='ADMIN_UID');
-
-            // author info
+            const canDel = uid && (uid===d.author || isAdmin);
             const prof = await getUser(d.author);
 
             const card = document.createElement('article');
@@ -125,35 +145,29 @@
       <h3>${d.title}</h3>
       <small>${(d.discussion||'misc').toUpperCase()} · ${(d.time&&d.time.toDate?d.time.toDate():new Date()).toLocaleString()}</small>
       <div class="post-body">${latexMarkupToHTML(d.post)}</div>
+      ${Array.isArray(d.imageURLs)&&d.imageURLs.length?`
+      <div class="post-images" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;margin:.5rem 0 0">
+        ${d.imageURLs.map(u=>`<a href="${u}" target="_blank" rel="noopener"><img loading="lazy" src="${u}" alt="image" style="width:100%;height:120px;object-fit:cover;border-radius:6px"></a>`).join('')}
+      </div>`:''}
       <div class="post-actions">
         <button class="like-btn">👍 <span>${d.likes||0}</span></button>
         <button class="comment-btn">💬 <span>${d.comments||0}</span></button>
         <span class="actions-right">${canDel?'<button class="del-btn">🗑️</button>':''}</span>
       </div>`;
 
-            // author click → profile
             card.querySelectorAll('[data-uid]').forEach(el=>{
-                el.onclick = e=>{
-                    const to = e.currentTarget.getAttribute('data-uid');
-                    location.href = `profile.html?uid=${to}`;
-                };
+                el.onclick = e=>{ const to = e.currentTarget.getAttribute('data-uid'); location.href = `profile.html?uid=${to}`; };
             });
 
-            // like handler
             card.querySelector('.like-btn').onclick=async()=>{
                 if(!auth.currentUser){alert('Login first');return;}
                 await db.runTransaction(async t=>{
-                    const s=await t.get(doc.ref);
-                    const cur=s.data().likes||0;
-                    t.update(doc.ref,{likes:cur+1});
+                    const s=await t.get(doc.ref); const cur=s.data().likes||0; t.update(doc.ref,{likes:cur+1});
                 });
             };
 
-            // delete handler
             if(canDel){
-                card.querySelector('.del-btn').onclick=async()=>{
-                    if(confirm('Delete this post?')) await doc.ref.delete();
-                };
+                card.querySelector('.del-btn').onclick=async()=>{ if(confirm('Delete this post?')) await doc.ref.delete(); };
             }
 
             renderLatex(card);
@@ -180,20 +194,13 @@
             listen();
         });
 
-        newBtn.onclick = ()=>{
+        if (newBtn) newBtn.onclick = ()=>{
             if(!auth.currentUser){alert('Please login first');return;}
             location.href='new-post.html';
         };
 
         listen();
-
-        newBtn.onclick = ()=>{
-            if(!auth.currentUser){alert('Please login first');return;}
-            location.href='new-post.html';
-        };
-
-        listen();
-    })();
+    });
 </script>
 </body>
 </html>

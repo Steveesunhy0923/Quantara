@@ -9,6 +9,8 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-functions-compat.js"></script>
+    <script src="admin.js"></script>
 
     <script>
         const firebaseConfig={apiKey:"AIzaSyCJTmL7fVTkf328MLSr-8je95CqtSxfMo0",projectId:"quantara-1",authDomain:"quantara-1.firebaseapp.com"};
@@ -25,18 +27,19 @@
         let articles=[]; // {id,title,content,slug}
         let currentIndex=-1;
         let editMode=false;
+        let isAdmin=false; // not used to gate UI anymore but kept for reference
 
         async function fetchArticles(){
             const snap=await db.collection('articles').orderBy('title').get();
             articles=[];
             for(const d of snap.docs){
                 const data=d.data();
-                let {title,content,slug}=data;
+                let {title,content,slug,pdfURL}=data;
                 if(!slug){
                     slug=slugify(title||'');
                     await d.ref.update({slug});
                 }
-                articles.push({id:d.id,title,content,slug});
+                articles.push({id:d.id,title,content,slug,pdfURL});
             }
         }
         async function pushArticle(article){const ref=await db.collection('articles').add(article);article.id=ref.id;}
@@ -65,26 +68,39 @@
             editMode=false;
 
             const cont=document.getElementById('content');
-            const html=latexMarkupToHTML(articles[i].content||'');
+            const a = articles[i];
+            const html=latexMarkupToHTML(a.content||'');
+
+            const controls = (auth.currentUser) ? `<div class="controls">
+                <button class="edit" onclick="toggleEdit()">Edit</button>
+                <button class="delete" onclick="removeArticle()">Delete</button>
+                <button class="upload" onclick="uploadPDF()">Upload PDF</button>
+            </div>` : '';
+
+            const body = a.pdfURL
+                ? `<div id="article-body">
+                     <iframe id="pdf-frame" src="${a.pdfURL}#view=FitH" style="width:100%;height:80vh;border:1px solid #ddd;border-radius:6px" loading="lazy"></iframe>
+                     <p><a href="${a.pdfURL}" target="_blank" rel="noopener">Open PDF in new tab</a></p>
+                   </div>`
+                : `<div id="article-body">${html}</div>`;
 
             cont.innerHTML = `
         <article>
-            <h1>${articles[i].title}</h1>
-            <div id="article-body">${html}</div>
-            <div class="controls">
-                <button class="edit" onclick="toggleEdit()">Edit</button>
-                <button class="delete" onclick="removeArticle()">Delete</button>
-            </div>
+            <h1>${a.title}</h1>
+            ${body}
+            ${controls}
         </article>`;
 
-            // ✅ 统一排版公式 + TikZ
-            renderLatex(cont);
+            if (!a.pdfURL) renderLatex(cont);
         }
 
         async function toggleEdit(){
             const body=document.getElementById('article-body');
             const btn=document.querySelector('.edit');
+            if(!auth.currentUser){ alert('Please login first'); return; }
             if(!editMode){
+                const ok = await AdminAPI.verifyAdminPassword();
+                if(!ok) return;
                 const ta=document.createElement('textarea');
                 ta.id='editor';
                 ta.value=articles[currentIndex].content||'';
@@ -95,14 +111,24 @@
                 const newContent=document.getElementById('editor').value;
                 const a=articles[currentIndex];
                 a.content=newContent;
-                await updateArticle(a);
+                const ok = await AdminAPI.verifyAdminPassword();
+                if(!ok) return;
+                try{
+                    // call server to update the article securely
+                    await AdminAPI.wikiUpdate(a.id, { content: newContent, title: a.title, slug: a.slug });
+                }catch(e){ alert(e.message||e); return; }
                 loadArticle(currentIndex);
             }
         }
 
         async function removeArticle(){
+            if(!auth.currentUser){ alert('Please login first'); return; }
+            const ok = await AdminAPI.verifyAdminPassword();
+            if(!ok) return;
             if(!confirm('Delete this article?')) return;
-            await deleteArticleFromDB(articles[currentIndex]);
+            try{
+                await AdminAPI.wikiDelete(articles[currentIndex].id);
+            }catch(e){ alert(e.message||e); return; }
             articles.splice(currentIndex,1);
             buildList();
             location.hash='';
@@ -110,41 +136,63 @@
         }
 
         async function createArticle(){
+            if(!auth.currentUser){ alert('Please login first'); return; }
+            const okPwd = await AdminAPI.verifyAdminPassword();
+            if(!okPwd) return;
             const title=prompt('Article title?');
             if(!title) return;
             const slug=slugify(title);
             if(findIndexBySlug(slug)!==-1){alert('Article exists');return;}
-            const art={title,slug,content:`\\section*{${title}}\n`};
-            await pushArticle(art);
+            const art={title,slug,content:`\\section*{${title}}\n`,pdfURL:null};
+            try{
+                const res = await AdminAPI.wikiCreate(art);
+                art.id = (res && res.id) || art.id;
+            }catch(e){ alert(e.message||e); return; }
             articles.push(art);
             buildList();
             loadArticle(articles.length-1,true);
             toggleEdit();
         }
 
+        // password verification moved to admin.jsru
+
+
         const auth = firebase.auth();
 
-        /* navbar UI */
+        /* navbar UI + admin claim */
         auth.onAuthStateChanged(async user=>{
             const login  = document.getElementById('loginBtn');
             const logout = document.getElementById('logoutBtn');
             const avatar = document.getElementById('navAvatar');
 
+            // resolve admin claim
+            let admin=false;
             if(user){
-                login.style.display  = 'none';
-                logout.style.display = 'inline';
-                // fetch photoURL if present
-                const snap = await db.doc(`users/${user.uid}`).get();
-                const url  = (snap.exists && snap.data().photoURL) || 'https://via.placeholder.com/28';
-                avatar.src = url;   avatar.style.display='inline';
-            }else{
-                login.style.display  = 'inline';
-                logout.style.display = avatar.style.display = 'none';
+                try{ const tok = await user.getIdTokenResult(true); admin = !!tok.claims.admin; }catch(e){}
             }
-        });
+            isAdmin = admin;
 
-        document.getElementById('loginBtn').onclick = ()=> location.href='login.html';
-        document.getElementById('logoutBtn').onclick= ()=> auth.signOut();
+            if(login&&logout&&avatar){
+                if(user){
+                    login.style.display  = 'none';
+                    logout.style.display = 'inline';
+                    // fetch photoURL if present
+                    const snap = await db.doc(`users/${user.uid}`).get();
+                    const url  = (snap.exists && snap.data().photoURL) || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28"><rect width="100%" height="100%" fill="%23ccc"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="10" fill="%23666">?</text></svg>';
+                    avatar.src = url;   avatar.style.display='inline';
+                }else{
+                    login.style.display  = 'inline';
+                    logout.style.display = avatar.style.display = 'none';
+                }
+            }
+
+            // toggle new-article button visibility for logged-in users only
+            const newBtnEl = document.getElementById('new-btn');
+            if (newBtnEl) newBtnEl.style.display = user ? 'inline' : 'none';
+
+            // re-render current article to refresh controls
+            if (currentIndex !== -1) loadArticle(currentIndex);
+        });
 
         /* ---------- Init ---------- */
         async function init(){
@@ -153,23 +201,73 @@
                 const idx=findIndexBySlug(location.hash.slice(1));
                 if(idx!==-1) loadArticle(idx,false);
             });
+            // bind navbar buttons only after DOM is ready
+            const loginBtn  = document.getElementById('loginBtn');
+            const logoutBtn = document.getElementById('logoutBtn');
+            if (loginBtn)  loginBtn.onclick  = ()=> location.href='login.html';
+            if (logoutBtn) logoutBtn.onclick = ()=> auth.signOut();
+
             await fetchArticles();
             buildList();
             const idx=findIndexBySlug(location.hash.slice(1));
             if(idx!==-1) loadArticle(idx); else if(articles.length) loadArticle(0); else document.getElementById('content').textContent='No articles yet.';
+        }
+
+        async function uploadPDF(){
+            if(!auth.currentUser){ alert('Please login first'); return; }
+            const ok = await AdminAPI.verifyAdminPassword();
+            if(!ok) return;
+
+            // pick a PDF file
+            const input=document.createElement('input');
+            input.type='file'; input.accept='application/pdf'; input.style.display='none';
+            document.body.appendChild(input);
+            const file = await new Promise(resolve=>{
+                input.onchange=()=>resolve(input.files && input.files[0]);
+                input.click();
+            });
+            input.remove();
+            if(!file) return;
+            if(file.type!=='application/pdf'){ alert('Please select a PDF file.'); return; }
+            if(file.size > 20*1024*1024){ alert('PDF must be under 20 MB.'); return; }
+
+            // lazy-load storage SDK
+            if (!firebase.storage){
+                const s=document.createElement('script');
+                s.src='https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js';
+                await new Promise((res,rej)=>{ s.onload=res; s.onerror=rej; document.head.appendChild(s); });
+            }
+
+            const a = articles[currentIndex];
+            const storage = firebase.storage();
+            const safeSlug = a.slug || slugify(a.title||'article');
+            const path = `wiki/pdfs/${safeSlug}-${cryptoRandom()}.pdf`;
+            const ref  = storage.ref(path);
+            try{
+                await ref.put(file, { contentType: 'application/pdf', customMetadata:{ articleId: a.id, slug: safeSlug } });
+                const url = await ref.getDownloadURL();
+                // update Firestore via admin function
+                await AdminAPI.wikiUpdate(a.id, { title:a.title, slug:a.slug, content:a.content, pdfURL:url });
+                a.pdfURL = url;
+                loadArticle(currentIndex);
+            }catch(e){ alert(e.message||e); }
+        }
+
+        function cryptoRandom(){
+            const arr=new Uint8Array(8); (window.crypto||window.msCrypto).getRandomValues(arr);
+            return Array.from(arr,b=>('0'+b.toString(16)).slice(-2)).join('');
         }
     </script>
 
     <!-- MathJax -->
     <script>window.MathJax={tex:{inlineMath:[["$","$"],["\\(","\\)"]],displayMath:[["$$","$$"],["\\[","\\]"]],packages:{'[+]':['ams']}}};</script>
     <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-    <link rel="stylesheet" type="text/css" href="https://tikzjax.com/v1/fonts.css">
-    <script src="https://tikzjax.com/v1/tikzjax.js"></script>
+    <!-- TikZ rendering removed; embed pre-exported SVGs directly in content -->
 
 </head>
 <body>
 <nav id="topbar">
-    <a href="#index.html">Home</a>
+    <a href="index.html">Home</a>
     <a href="wiki.html">Wiki</a>
     <a href="test.html">Test</a>
     <a href="community.html">Community</a>
@@ -177,7 +275,7 @@
     <span style="margin-left:auto"></span>
     <button id="loginBtn">Login</button>
     <button id="logoutBtn" style="display:none">Logout</button>
-    <img id="navAvatar" src="https://via.placeholder.com/28"
+    <img id="navAvatar" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28'><rect width='100%' height='100%' fill='%23ccc'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='10' fill='%23666'>?</text></svg>"
          style="width:28px;height:28px;border-radius:50%;display:none;margin-left:.5rem">
 
 </nav>

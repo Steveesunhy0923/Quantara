@@ -1,0 +1,10 @@
+{
+  "items": [
+    { "id": "red",    "name": "Red",    "src": "avatars/solid-red.svg" },
+    { "id": "green",  "name": "Green",  "src": "avatars/solid-green.svg" },
+    { "id": "blue",   "name": "Blue",   "src": "avatars/solid-blue.svg" },
+    { "id": "purple", "name": "Purple", "src": "avatars/solid-purple.svg" },
+    { "id": "orange", "name": "Orange", "src": "avatars/solid-orange.svg" },
+    { "id": "gray",   "name": "Gray",   "src": "avatars/solid-gray.svg" }
+  ]
+}

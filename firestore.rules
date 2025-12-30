@@ -1,0 +1,513 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.admin == true;
+    }
+
+    function isSteveAdmin() {
+      return isAdmin()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.username == 'stevesunhy';
+    }
+
+    function banUntil(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data.banUntil;
+    }
+
+    function isBanned(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid))
+        && banUntil(uid) is timestamp
+        && request.time < banUntil(uid);
+    }
+
+    function isPinnedForumId(forumId) {
+      return forumId in [
+        'Discussion:announcement','Discussion:general',
+        'Q&A:announcement','Q&A:general',
+        'Write-ups:announcement','Write-ups:general',
+        'Wiki build:announcement','Wiki build:general'
+      ];
+    }
+
+    function postAuthor(postId) {
+      return get(/databases/$(database)/documents/communityPosts/$(postId)).data.author;
+    }
+
+    function isPostAuthor(postId) {
+      return isSignedIn() && postAuthor(postId) == request.auth.uid;
+    }
+
+    // Public reads everywhere unless overridden below
+    match /{document=**} {
+      allow read: if true;
+    }
+
+    // Wiki articles: only admins can create/update/delete
+    match /articles/{id} {
+      allow read: if true;
+      allow create, update, delete: if request.auth != null && request.auth.token.admin == true;
+    }
+
+    // Wiki contributions: any signed-in user can submit a pending contribution to stevesunhy.
+    // Only stevesunhy (admin) can review/apply/reject.
+    match /wikiContributions/{id} {
+      allow read: if isSteveAdmin() || (isSignedIn() && resource.data.fromUid == request.auth.uid);
+
+      allow create: if isSignedIn()
+                    && request.resource.data.fromUid == request.auth.uid
+                    && request.resource.data.toUsername == 'stevesunhy'
+                    && request.resource.data.status == 'pending'
+                    && request.resource.data.createdAt is timestamp
+                    && request.resource.data.kind in ['new','edit']
+                    && request.resource.data.title is string
+                    && request.resource.data.title.size() > 0
+                    && request.resource.data.title.size() <= 120
+                    && request.resource.data.content is string
+                    && request.resource.data.content.size() > 0
+                    && request.resource.data.content.size() <= 80000
+                    && (!('keywords' in request.resource.data) || request.resource.data.keywords is list)
+                    && (!('articleId' in request.resource.data) || request.resource.data.articleId is string)
+                    && (!('articleSlug' in request.resource.data) || request.resource.data.articleSlug is string);
+
+      // Admin reviews: allow status transitions + metadata only.
+      allow update: if isSteveAdmin()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                      'status','reviewedAt','reviewedBy','adminNote','appliedArticleId'
+                    ])
+                    && request.resource.data.status in ['applied','rejected']
+                    && request.resource.data.reviewedAt is timestamp
+                    && request.resource.data.reviewedBy == request.auth.uid;
+
+      allow delete: if isSteveAdmin();
+    }
+
+    // Community posts
+    match /communityPosts/{postId} {
+      allow read: if true;
+
+      function needsLevel(cat) {
+        return cat in ['Discussion','Q&A','Write-ups'];
+      }
+
+      function isAnnouncementPost() {
+        return request.resource.data.channel == 'announcement';
+      }
+
+      // Any signed-in user can create a post where author == uid
+      allow create: if request.auth != null
+                    && !isBanned(request.auth.uid)
+                    && request.resource.data.author == request.auth.uid
+                    // New forum model
+                    && request.resource.data.bigCategory is string
+                    && request.resource.data.channel is string
+                    && request.resource.data.subjects is list
+                    && request.resource.data.subjects.size() >= 1
+                    && (!needsLevel(request.resource.data.bigCategory) || request.resource.data.level is string)
+                    // Announcements are server-only (created via Cloud Functions / Admin SDK).
+                    && request.resource.data.channel != 'announcement';
+
+      // Author can update their own post content (NOT likes/comments counters)
+      allow update: if isSignedIn()
+                    && resource.data.author == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                      'title','post','discussion','imageURLs','hasImages',
+                      'bigCategory','channel','subjects','level'
+                    ]);
+
+      // Author (or admin) can delete their own post
+      allow delete: if isSignedIn() && (resource.data.author == request.auth.uid || isAdmin());
+    }
+
+    // Post likes (one doc per user). Cloud Function maintains the `likes` counter on the post.
+    // Explicit match (avoids any confusion about nested match scoping).
+    match /communityPosts/{postId}/likes/{userId} {
+      allow read: if true;
+      allow create: if isSignedIn() && !isBanned(request.auth.uid) && request.auth.uid == userId;
+      allow delete: if isSignedIn() && !isBanned(request.auth.uid) && request.auth.uid == userId;
+      allow update: if false;
+    }
+
+    // Comments (top-level collection).
+    // Each comment points to a post, and optionally to a parent comment (reply thread).
+    match /comments/{commentId} {
+      allow read: if true;
+
+      function isValidReply(postId, replyToCommentId) {
+        return replyToCommentId == null
+          || (
+            exists(/databases/$(database)/documents/comments/$(replyToCommentId))
+            && get(/databases/$(database)/documents/comments/$(replyToCommentId)).data.postId == postId
+          );
+      }
+
+      // Create: any signed-in user can create a comment as themselves.
+      // Required fields:
+      // - postId (string)
+      // - author (uid)
+      // - content (string)
+      // - timestamp (timestamp)
+      // Optional (if omitted, treated as defaults by UI):
+      // - likes (0)
+      // - pinned (false)
+      // Optional:
+      // - replyToCommentId (string|null)
+      allow create: if isSignedIn()
+                    && !isBanned(request.auth.uid)
+                    && request.resource.data.postId is string
+                    && exists(/databases/$(database)/documents/communityPosts/$(request.resource.data.postId))
+                    && request.resource.data.author == request.auth.uid
+                    && request.resource.data.content is string
+                    && request.resource.data.content.size() > 0
+                    && request.resource.data.content.size() <= 4000
+                    && request.resource.data.timestamp is timestamp
+                    && (!('likes' in request.resource.data) || request.resource.data.likes == 0)
+                    && (!('pinned' in request.resource.data) || request.resource.data.pinned == false)
+                    && isValidReply(request.resource.data.postId, request.resource.data.replyToCommentId);
+
+      // Update:
+      // - comment author can edit content (and set editedAt)
+      // - post author/admin can pin/unpin (and set pinnedAt)
+      // Disallow changing postId/author/replyToCommentId via updates.
+      allow update: if isSignedIn() && (
+        (
+          resource.data.author == request.auth.uid
+          && request.resource.data.postId == resource.data.postId
+          && request.resource.data.author == resource.data.author
+          && request.resource.data.replyToCommentId == resource.data.replyToCommentId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['content','editedAt'])
+          && request.resource.data.content is string
+          && request.resource.data.content.size() > 0
+          && request.resource.data.content.size() <= 4000
+        )
+        ||
+        (
+          (isPostAuthor(resource.data.postId) || isAdmin())
+          && request.resource.data.postId == resource.data.postId
+          && request.resource.data.author == resource.data.author
+          && request.resource.data.replyToCommentId == resource.data.replyToCommentId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pinned','pinnedAt'])
+        )
+      );
+
+      // Delete: comment author, post author, or admin.
+      allow delete: if isSignedIn() && (
+        resource.data.author == request.auth.uid
+        || isPostAuthor(resource.data.postId)
+        || isAdmin()
+      );
+
+      // Comment likes: one doc per user under the comment doc.
+      match /likes/{userId} {
+        allow read: if true;
+        allow create: if isSignedIn() && !isBanned(request.auth.uid) && request.auth.uid == userId;
+        allow delete: if isSignedIn() && !isBanned(request.auth.uid) && request.auth.uid == userId;
+        allow update: if false;
+      }
+    }
+
+    // User profiles: user may write own doc; everyone may read
+    match /users/{uId} {
+      allow read: if true;
+      // Create: allow user to create their own profile once (includes username).
+      allow create: if isSignedIn()
+                    && request.auth.uid == uId
+                    && request.resource.data.username is string
+                    && request.resource.data.username.size() >= 3
+                    && request.resource.data.username.size() <= 32
+                    && request.resource.data.email is string;
+
+      // Update: allow profile edits but keep `username` and `email` immutable (prevents impersonation).
+      allow update: if isSignedIn()
+                    && request.auth.uid == uId
+                    && request.resource.data.username == resource.data.username
+                    && request.resource.data.email == resource.data.email
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                      'about','photoURL'
+                    ]);
+
+      // Admin moderation fields on user doc (ban).
+      allow update: if isSteveAdmin()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                      'banUntil','banReason','bannedBy','bannedAt'
+                    ])
+                    && request.resource.data.bannedBy == request.auth.uid;
+    }
+
+    // Gamification state (XP/level), achievements, and badges:
+    // - Readable (e.g., for profile display / leaderboards)
+    // - Not directly writable by clients (Cloud Functions only)
+    match /users/{uId}/gameState/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /users/{uId}/achievements/{achievementId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /users/{uId}/badges/{badgeId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // XP event log: private (owner only). No direct client writes.
+    match /users/{uId}/xpEvents/{eventId} {
+      allow read: if isSignedIn() && request.auth.uid == uId;
+      allow write: if false;
+    }
+
+    // Per-user daily counters (private; used for caps like comments/day).
+    match /users/{uId}/gameDaily/{dateKey} {
+      allow read: if isSignedIn() && request.auth.uid == uId;
+      allow write: if false;
+    }
+
+    // User starred posts (bookmarks).
+    // Stored per-user so listing "my starred posts" is fast.
+    match /users/{uId}/stars/{postId} {
+      allow read: if isSignedIn() && request.auth.uid == uId;
+      allow create: if isSignedIn()
+                    && !isBanned(request.auth.uid)
+                    && request.auth.uid == uId
+                    && exists(/databases/$(database)/documents/communityPosts/$(postId))
+                    && request.resource.data.createdAt is timestamp;
+      allow delete: if isSignedIn() && !isBanned(request.auth.uid) && request.auth.uid == uId;
+      allow update: if false;
+    }
+
+    // Forums/channels (user-creatable, admin-disable).
+    // Each forum has:
+    // - bigCategory (Discussion / Q&A / Write-ups / Wiki build / Chatty)
+    // - channel (small category / subforum)
+    // - deleted (bool)
+    match /forums/{forumId} {
+      allow read: if true;
+      allow create: if isSignedIn()
+                    && request.resource.data.bigCategory is string
+                    && request.resource.data.channel is string
+                    && request.resource.data.createdBy == request.auth.uid
+                    && request.resource.data.createdAt is timestamp
+                    && (!('deleted' in request.resource.data) || request.resource.data.deleted == false);
+      // Only stevesunhy (admin) can disable/enable or delete forums.
+      allow update: if isSteveAdmin()
+                    && !isPinnedForumId(forumId)
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deleted','deletedAt','deletedBy'])
+                    && request.resource.data.deleted is bool;
+      allow delete: if isSteveAdmin() && !isPinnedForumId(forumId);
+    }
+
+    // Per-user pinned chats.
+    match /users/{uId}/chatPins/{chatId} {
+      allow read: if isSignedIn() && request.auth.uid == uId;
+      allow create: if isSignedIn()
+                    && request.auth.uid == uId
+                    && request.resource.data.pinnedAt is timestamp;
+      allow delete: if isSignedIn() && request.auth.uid == uId;
+      allow update: if false;
+    }
+
+    // Username index: usernames/{usernameLower} -> { uid }
+    // Used for "add friend / message by username" without scanning all users.
+    match /usernames/{uname} {
+      	allow read: if true;
+      allow create: if isSignedIn()
+                    && request.resource.data.uid == request.auth.uid
+                    && !exists(/databases/$(database)/documents/usernames/$(uname));
+      allow update, delete: if false;
+    }
+
+    // Friendships: one doc per pair of users:
+    // friendships/{minUid}_{maxUid}:
+    // { users:[uid1,uid2], status:'pending'|'accepted', requestedBy, requestedAt, acceptedAt? }
+    match /friendships/{fid} {
+      allow read: if isSignedIn() && (request.auth.uid in resource.data.users);
+
+      allow create: if isSignedIn()
+                    && request.resource.data.users is list
+                    && request.resource.data.users.size() == 2
+                    && (request.auth.uid in request.resource.data.users)
+                    && request.resource.data.requestedBy == request.auth.uid
+                    && request.resource.data.status == 'pending';
+
+      // Only the non-requester can accept.
+      allow update: if isSignedIn()
+                    && (request.auth.uid in resource.data.users)
+                    && resource.data.status == 'pending'
+                    && request.resource.data.status == 'accepted'
+                    && resource.data.requestedBy != request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                      'status','acceptedAt','acceptedBy','updatedAt'
+                    ]);
+
+      // Either participant can delete (decline/cancel)
+      allow delete: if isSignedIn() && (request.auth.uid in resource.data.users);
+    }
+
+    // Chats: private to participants. (Cloud Functions maintain unread counts + lastMessage.)
+    match /chats/{chatId} {
+      allow read: if isSignedIn() && (request.auth.uid in resource.data.participants);
+
+      // Client can create a chat doc that includes themselves.
+      allow create: if isSignedIn()
+                    && !isBanned(request.auth.uid)
+                    && request.resource.data.participants is list
+                    && request.resource.data.participants.size() >= 2
+                    && (request.auth.uid in request.resource.data.participants);
+
+      // Disallow client updates (use Cloud Functions for lastMessage/unreadCounts).
+      allow update, delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn()
+                    && (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants);
+
+        function isValidMessageKind(){
+          return !('kind' in request.resource.data)
+            || request.resource.data.kind in ['text','image','post','wiki'];
+        }
+
+        function hasText(){
+          return ('text' in request.resource.data)
+            && request.resource.data.text is string
+            && request.resource.data.text.size() > 0
+            && request.resource.data.text.size() <= 2000;
+        }
+
+        function isValidReply(){
+          return !('replyTo' in request.resource.data)
+            || (
+              request.resource.data.replyTo is map
+              && request.resource.data.replyTo.messageId is string
+            );
+        }
+
+        function isValidImage(){
+          return request.resource.data.kind == 'image'
+            && request.resource.data.imageURL is string
+            && request.resource.data.imageURL.size() > 0;
+        }
+
+        function isValidPost(){
+          return request.resource.data.kind == 'post'
+            && request.resource.data.postId is string
+            && exists(/databases/$(database)/documents/communityPosts/$(request.resource.data.postId));
+        }
+
+        function isValidWiki(){
+          // Wiki pages are articles with a `slug`.
+          // We validate minimal structure here (slug is enough to navigate).
+          return request.resource.data.kind == 'wiki'
+            && request.resource.data.wikiSlug is string
+            && request.resource.data.wikiSlug.size() > 0;
+        }
+
+        allow create: if isSignedIn()
+                      && !isBanned(request.auth.uid)
+                      && exists(/databases/$(database)/documents/chats/$(chatId))
+                      && (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants)
+                      && request.resource.data.senderUid == request.auth.uid
+                      && isValidMessageKind()
+                      && isValidReply()
+                      && (
+                        // Default/text messages
+                        ((!('kind' in request.resource.data) || request.resource.data.kind == 'text') && hasText())
+                        ||
+                        // Rich messages
+                        (request.resource.data.kind == 'image' && isValidImage())
+                        ||
+                        (request.resource.data.kind == 'post' && isValidPost())
+                        ||
+                        (request.resource.data.kind == 'wiki' && isValidWiki())
+                      );
+
+        allow update, delete: if false;
+      }
+    }
+
+    match /avatarPresets/{id} {
+  		allow read: if true;
+  		allow write: if false;
+		}
+     // Problem templates (optional): public read; only admins manage
+    match /problemTemplates/{templateId} {
+      allow read: if true;
+      allow create, update, delete: if request.auth != null && request.auth.token.admin == true;
+    }
+
+    // Game attempts and per-attempt items
+    match /gameAttempts/{attemptId} {
+      // Anyone can read attempts (for leaderboards)
+      allow read: if true;
+
+      // Only the signed-in owner can create their own attempt
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid;
+
+      // Allow owner to finalize limited fields at the end of attempt
+      allow update: if request.auth != null
+                    && resource.data.uid == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                      'endedAt','score','total','correct','rating'
+                    ]);
+      // No deletes
+      allow delete: if false;
+
+      // Attempt items: allow owner to create items under their attempt
+      match /items/{itemId} {
+        allow read: if true;
+        allow create: if request.auth != null
+                      && get(/databases/$(database)/documents/gameAttempts/$(attemptId)).data.uid == request.auth.uid;
+        allow update, delete: if false;
+      }
+    }
+    
+    
+    // Question banks per mode
+    match /questions_timed/{id} {
+      allow read: if true;
+      allow create, update, delete: if request.auth != null && request.auth.token.admin == true;
+    }
+    match /questions_rating/{id} {
+      allow read: if true;
+      allow create, update, delete: if request.auth != null && request.auth.token.admin == true;
+    }
+    match /questions_custom/{id} {
+      allow read: if true;
+      allow create, update, delete: if request.auth != null && request.auth.token.admin == true;
+    }
+    
+    // -----------------------------
+    // Daily Challenge
+    // -----------------------------
+
+    // Public read of the day’s challenge doc (answer is encrypted server-side).
+    // No direct client writes; Cloud Functions (Admin SDK) bypass rules.
+    match /dailyChallenges/{dateKey} {
+      allow read: if true;
+      allow create, update, delete: if false;
+
+      match /submissions/{uid} {
+        // Submissions are handled via callable function; keep these private by default.
+        allow read: if false;
+        allow write: if false;
+      }
+    }
+
+    // Leaderboard stats: public read; no direct client writes.
+    match /challengeStats/{uid} {
+      allow read: if true;
+      allow write: if false;
+
+      match /days/{dateKey} {
+        allow read: if false;
+        allow write: if false;
+      }
+    }
+    
+  }
+  }

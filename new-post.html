@@ -5,11 +5,24 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     <script>
-        firebase.initializeApp({apiKey:"AIzaSyCJTmL7fVTkf328MLSr-8je95CqtSxfMo0",
-            projectId:"quantara-1",authDomain:"quantara-1.firebaseapp.com"});
+        firebase.initializeApp({
+            apiKey:"AIzaSyCJTmL7fVTkf328MLSr-8je95CqtSxfMo0",
+            projectId:"quantara-1",
+            authDomain:"quantara-1.firebaseapp.com",
+            storageBucket:"quantara-1.firebasestorage.app"
+        });
         const auth=firebase.auth(),db=firebase.firestore();
         auth.onAuthStateChanged(u=>{if(!u) location.href='login.html';});
     </script></head><body>
+<script>
+  // React version of this page lives at `/new`.
+  // If you're viewing this via a server, jump to the React route so features stay in one place.
+  (function(){
+    if (location.protocol !== 'file:') {
+      location.replace('/new');
+    }
+  })();
+</script>
 <h2>New Post</h2>
 <form id="postForm">
     <input name="title" placeholder="Title" required style="width:100%;font-size:1.1rem"><br>
@@ -19,6 +32,7 @@
         <option>combinatorics</option><option>calculus</option>
     </select><br>
     <textarea name="post" rows="10" placeholder="Your content (LaTeX allowed)" required></textarea><br>
+    <input type="file" id="images" accept="image/*" multiple><br>
     <button type="submit">Publish</button>
 </form>
 <script>
@@ -26,7 +40,9 @@
         e.preventDefault();
         const u=auth.currentUser;
         const usr= await db.doc(`users/${u.uid}`).get();
-        await db.collection('communityPosts').add({
+
+        // create post first to get postId
+        const base = {
             title:this.title.value,
             post:this.post.value,
             discussion:this.discussion.value,
@@ -35,10 +51,63 @@
             comments:0,
             author:u.uid,
             authorName: usr.data().username,
-            authorPhoto: usr.data().photoURL || 'https://via.placeholder.com/24'
-        });
+            authorPhoto: usr.data().photoURL || 'https://via.placeholder.com/24',
+            hasImages:false
+        };
+
+        const postRef = await db.collection('communityPosts').add(base);
+
+        // upload selected images (if any)
+        const input = document.getElementById('images');
+        const files = Array.from(input.files||[]).slice(0,6);
+        let imageURLs = [];
+        if (files.length){
+            // lazy-load storage SDK
+            if (!firebase.storage){
+                const s=document.createElement('script');
+                s.src='https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js';
+                await new Promise((res,rej)=>{ s.onload=res; s.onerror=rej; document.head.appendChild(s); });
+            }
+            // Use default bucket from firebase config
+            const storage = firebase.storage();
+            const tasks = files.map(async (file)=>{
+                const ct = normalizeContentType(file.type);
+                if (!/^image\/(png|jpeg|webp|svg\+xml)$/.test(ct)) return null;
+                if (file.size > 5*1024*1024) return null; // 5MB limit
+                const path = `community/${u.uid}/${postRef.id}/${cryptoRandom()}.${extFromType(ct)}`;
+                const ref  = storage.ref(path);
+                await ref.put(file, { contentType: ct, customMetadata:{ postId: postRef.id, author: u.uid }});
+                return await ref.getDownloadURL();
+            });
+            imageURLs = (await Promise.all(tasks)).filter(Boolean);
+        }
+
+        if (imageURLs.length){
+            await postRef.update({ imageURLs, hasImages:true });
+        }
         location.href='community.html';
     };
+
+    function cryptoRandom(){
+        const a=new Uint8Array(16); (window.crypto||window.msCrypto).getRandomValues(a);
+        return Array.from(a, b=>('0'+b.toString(16)).slice(-2)).join('');
+    }
+    function extFromType(t){
+        if (t==='image/png') return 'png';
+        if (t==='image/jpeg') return 'jpg';
+        if (t==='image/jpg') return 'jpg';
+        if (t==='image/pjpeg') return 'jpg';
+        if (t==='image/webp') return 'webp';
+        if (t==='image/svg+xml') return 'svg';
+        if (t==='image/svg') return 'svg';
+        return 'bin';
+    }
+    function normalizeContentType(t){
+        // Some platforms report JPEG/SVG as non-standard but common types.
+        if (t==='image/jpg' || t==='image/pjpeg') return 'image/jpeg';
+        if (t==='image/svg') return 'image/svg+xml';
+        return t;
+    }
 </script>
 </body>
 </html>

@@ -1,0 +1,79 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Public read for avatars; owner-only writes under their uid path
+    // Allow both `avatars/{uid}` (single object) and `avatars/{uid}/**` (folder)
+    match /avatars/{userId} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+    match /avatars/{userId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Community post images: public read; owner-only writes with limits
+    // Use `{allPaths=**}` so you can add subfolders later (e.g. thumbs/) without changing rules.
+    match /community/{userId}/{postId}/{allPaths=**} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+                   && request.auth.uid == userId
+                            && request.resource != null
+                   && request.resource.size < 5 * 1024 * 1024
+                            && request.resource.contentType != null
+                            // Some browsers/devices send non-standard but common JPEG/SVG contentTypes.
+                            && request.resource.contentType.matches('image/(png|jpeg|jpg|pjpeg|webp|svg\\+xml|svg)');
+      // Deletes have no `request.resource`, so allow them separately.
+      allow delete: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Wiki images/figures: public read; admin-only writes
+    // Allows images anywhere under /wiki/** (e.g. wiki/figures/*, wiki/images/*, wiki/*)
+    match /wiki/{allPaths=**} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+                   && request.auth.token.admin == true
+                            && request.resource != null
+                            && request.resource.contentType != null
+                   && request.resource.contentType.matches('image/.*')
+                   && request.resource.size < 10 * 1024 * 1024; // 10MB
+      allow delete: if request.auth != null && request.auth.token.admin == true;
+    }
+
+    // Wiki PDFs: public read; admin writes (PDF only, size limit 20MB)
+    match /wiki/pdfs/{fileName} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+                   && request.auth.token.admin == true
+                            && request.resource != null
+                   && request.resource.contentType == 'application/pdf'
+                   && request.resource.size < 20 * 1024 * 1024;
+      allow delete: if request.auth != null && request.auth.token.admin == true;
+    }
+
+    // Daily challenge problem images: public read; admin-only writes
+    match /dailyChallenges/{dateKey}/{allPaths=**} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+                   && request.auth.token.admin == true
+                            && request.resource != null
+                   && request.resource.contentType != null
+                   && request.resource.contentType.matches('image/.*')
+                   && request.resource.size < 5 * 1024 * 1024; // 5MB
+      allow delete: if request.auth != null && request.auth.token.admin == true;
+    }
+
+    // Chat media (images): authenticated read; owner-only writes.
+    // Note: Storage rules can't easily check Firestore chat membership, so this is "auth-only read".
+    match /chatMedia/{userId}/{chatId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null
+                   && request.auth.uid == userId
+                            && request.resource != null
+                   && request.resource.size < 10 * 1024 * 1024
+                            && request.resource.contentType != null
+                            && request.resource.contentType.matches('image/(png|jpeg|jpg|pjpeg|webp|gif)');
+      allow delete: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "math-website",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix app run dev",
+    "build": "npm --prefix app run build",
+    "deploy": "npm --prefix app run build && firebase deploy",
+    "deploy:hosting": "npm --prefix app run build && firebase deploy --only hosting",
+    "deploy:functions": "firebase deploy --only functions"
+  }
+}
+
+
+

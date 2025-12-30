@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Function Ball · Quantara</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    main{padding:1rem;max-width:1100px;margin:0 auto}
+    .crumbs{margin:.25rem 0 1rem 0;color:#666}
+    .crumbs a{color:#1a73e8;text-decoration:none}
+    .crumbs a:hover{text-decoration:underline}
+    .layout{display:grid;grid-template-columns:1fr 360px;gap:12px;align-items:start}
+    @media (max-width: 980px){ .layout{grid-template-columns:1fr} }
+    canvas{width:100%;height:auto;border:1px solid #ddd;border-radius:10px;background:#fff}
+    .panel{border:1px solid #ddd;border-radius:10px;background:#fff;padding:12px}
+    .panel h3{margin:.25rem 0 .5rem 0}
+    .row{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+    label{font-size:.9rem;color:#333}
+    input,select,textarea{padding:.35rem .45rem}
+    textarea{width:100%;min-height:160px;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace}
+    .muted{color:#666}
+    .btn{border:1px solid #ddd;border-radius:8px;padding:.5rem .75rem;background:#f7f7f7;cursor:pointer}
+    .btn.primary{background:#1a73e8;border-color:#1a73e8;color:#fff}
+  </style>
+</head>
+<body>
+  <nav id="topbar">
+    <a href="index.html">Home</a>
+    <a href="wiki.html">Wiki</a>
+    <a href="test.html">Test</a>
+    <a href="community.html">Community</a>
+    <a href="#">Problem&nbsp;Archive</a>
+    <span style="margin-left:auto"></span>
+    <button onclick="location.href='login.html'">Login</button>
+  </nav>
+
+  <main>
+    <div class="crumbs"><a href="test.html">Math Games</a> / <strong>Function Ball</strong></div>
+    <h1>Function Ball</h1>
+    <p class="muted" style="margin-top:0">This page is now created and wired from the hub. Next step is implementing the full physics + function surfaces + level editor.</p>
+
+    <div class="layout">
+      <div>
+        <canvas id="sim" width="900" height="540"></canvas>
+        <div class="row" style="margin-top:.6rem">
+          <button class="btn primary" id="playBtn">Play</button>
+          <button class="btn" id="resetBtn">Reset</button>
+          <span class="muted" id="status"></span>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>Level</h3>
+        <div class="row">
+          <label>Gravity <input id="gravity" type="number" step="0.1" value="9.8" style="width:90px"></label>
+          <label>Ball mass <input id="mass" type="number" step="0.1" value="1" style="width:90px"></label>
+        </div>
+        <p class="muted" style="margin:.5rem 0 0 0">
+          Surfaces will be defined by functions \(y=f(x)\) with a friction coefficient. I’ll implement:
+          drawing, parsing, collisions, friction, goal detection, plus JSON import/export and custom levels.
+        </p>
+        <h3 style="margin-top:1rem">Surfaces (preview)</h3>
+        <textarea id="surfaces" spellcheck="false"># Example (coming soon)
+# y = 0.25 * (x-2)^2 - 1  friction=0.15
+</textarea>
+        <div class="row" style="margin-top:.6rem">
+          <button class="btn" id="exportBtn">Export JSON</button>
+          <button class="btn" id="importBtn">Import JSON</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const canvas = document.getElementById('sim');
+    const ctx = canvas.getContext('2d');
+    const statusEl = document.getElementById('status');
+    const gravityEl = document.getElementById('gravity');
+    const massEl = document.getElementById('mass');
+    const playBtn = document.getElementById('playBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const exportBtn = document.getElementById('exportBtn');
+    const importBtn = document.getElementById('importBtn');
+
+    const state = {
+      playing: false,
+      t0: performance.now(),
+      ball: { x: 120, y: 120, r: 14, vx: 0, vy: 0 },
+      start: { x: 120, y: 120 },
+      goal:  { x: 780, y: 420, r: 22 },
+    };
+
+    function reset(){
+      state.ball.x = state.start.x;
+      state.ball.y = state.start.y;
+      state.ball.vx = 0;
+      state.ball.vy = 0;
+      state.playing = false;
+      playBtn.textContent = 'Play';
+      statusEl.textContent = '';
+      draw();
+    }
+
+    function step(dt){
+      const g = Number(gravityEl.value || 9.8);
+      // Placeholder free-fall only (real surface physics coming next)
+      state.ball.vy += g * dt * 40;
+      state.ball.x  += state.ball.vx * dt * 40;
+      state.ball.y  += state.ball.vy * dt * 40;
+
+      // simple bounds
+      if (state.ball.x < state.ball.r){ state.ball.x = state.ball.r; state.ball.vx *= -0.3; }
+      if (state.ball.x > canvas.width - state.ball.r){ state.ball.x = canvas.width - state.ball.r; state.ball.vx *= -0.3; }
+      if (state.ball.y < state.ball.r){ state.ball.y = state.ball.r; state.ball.vy *= -0.3; }
+      if (state.ball.y > canvas.height - state.ball.r){ state.ball.y = canvas.height - state.ball.r; state.ball.vy *= -0.3; }
+
+      const dx = state.ball.x - state.goal.x, dy = state.ball.y - state.goal.y;
+      if (Math.hypot(dx,dy) <= state.ball.r + state.goal.r){
+        state.playing = false;
+        playBtn.textContent = 'Play';
+        statusEl.textContent = 'Goal reached! (Physics editor is next.)';
+      }
+    }
+
+    function draw(){
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      // grid
+      ctx.save();
+      ctx.strokeStyle = '#eee';
+      for (let x=0;x<=canvas.width;x+=50){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
+      for (let y=0;y<=canvas.height;y+=50){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); }
+      ctx.restore();
+
+      // start
+      ctx.fillStyle = '#1a73e8';
+      ctx.beginPath(); ctx.arc(state.start.x, state.start.y, 10, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#333'; ctx.fillText('Start', state.start.x+14, state.start.y+4);
+
+      // goal
+      ctx.strokeStyle = '#34a853';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(state.goal.x, state.goal.y, state.goal.r, 0, Math.PI*2); ctx.stroke();
+      ctx.fillStyle = '#333'; ctx.fillText('Goal', state.goal.x+state.goal.r+8, state.goal.y+4);
+
+      // ball
+      ctx.fillStyle = '#fbbc05';
+      ctx.beginPath(); ctx.arc(state.ball.x, state.ball.y, state.ball.r, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle = '#c28e00'; ctx.stroke();
+    }
+
+    function loop(now){
+      const dt = Math.min(0.05, (now - state.t0) / 1000);
+      state.t0 = now;
+      if (state.playing) step(dt);
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    playBtn.onclick = ()=>{
+      state.playing = !state.playing;
+      playBtn.textContent = state.playing ? 'Pause' : 'Play';
+      statusEl.textContent = state.playing ? '' : statusEl.textContent;
+    };
+    resetBtn.onclick = reset;
+
+    exportBtn.onclick = async ()=>{
+      const payload = {
+        gravity: Number(gravityEl.value || 9.8),
+        mass: Number(massEl.value || 1),
+        start: state.start,
+        goal: state.goal,
+        surfacesText: document.getElementById('surfaces').value || ''
+      };
+      await navigator.clipboard?.writeText(JSON.stringify(payload, null, 2)).catch(()=>{});
+      alert('Exported level JSON (copied to clipboard if permitted).');
+    };
+
+    importBtn.onclick = ()=>{
+      const json = prompt('Paste level JSON');
+      if (!json) return;
+      try{
+        const d = JSON.parse(json);
+        gravityEl.value = String(d.gravity ?? 9.8);
+        massEl.value = String(d.mass ?? 1);
+        if (d.start){ state.start = { x:+d.start.x||120, y:+d.start.y||120 }; }
+        if (d.goal){ state.goal = { x:+d.goal.x||780, y:+d.goal.y||420, r:+d.goal.r||22 }; }
+        document.getElementById('surfaces').value = d.surfacesText || '';
+        reset();
+      }catch(e){ alert('Invalid JSON'); }
+    };
+
+    reset();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
+
+

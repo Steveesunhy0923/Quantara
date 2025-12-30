@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quantara · Math & Science</title>
+    <link rel="stylesheet" type="text/css" href="https://tikzjax.com/v1/fonts.css">
+    <script>
+      window.MathJax = {
+        tex: {
+          inlineMath: [["$","$"],["\\(","\\)"]],
+          displayMath: [["$$","$$"],["\\[","\\]"]],
+          packages: { '[+]': ['ams'] }
+        },
+        options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+      };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/tikzjax@1.0.4/tikzjax.min.js" onload="window.TikzJax && window.TikzJax.config({lazy:false, wasmURL: 'https://cdn.jsdelivr.net/npm/tikzjax@1.0.4/tikzjax.wasm'})"></script>
+  </head>
+  <body>
+    <div id="root">
+      <noscript>Please enable JavaScript to run this app.</noscript>
+      <div style="font-family:system-ui,sans-serif;min-height:100vh;display:flex;flex-direction:column;">
+        <nav style="display:flex;background:#212121;color:#fff;padding:.5rem 1rem;gap:1rem;">
+          <a href="/wiki" style="color:#fff;text-decoration:none;">Wiki</a>
+          <a href="/community" style="color:#fff;text-decoration:none;">Community</a>
+          <a href="/test" style="color:#fff;text-decoration:none;">Test</a>
+          <span style="margin-left:auto"></span>
+          <a href="/login" style="color:#fff;text-decoration:none;">Login</a>
+        </nav>
+        <main style="flex:1;display:flex;align-items:center;justify-content:center;padding:2rem;">
+          <div style="max-width:60ch;text-align:center;">
+            <h1 style="margin:0 0 .25rem 0;font-weight:700;">Quantara</h1>
+            <p style="margin:0;color:#555">Explorable math & science wiki and community</p>
+            <p style="margin-top:1.25rem;color:#777">Loading app…</p>
+          </div>
+        </main>
+      </div>
+    </div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

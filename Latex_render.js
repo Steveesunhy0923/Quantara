@@ -7,12 +7,45 @@ function slugify(str){
 
 /* 2. transform raw article → safe HTML ------------- */
 function latexMarkupToHTML(src){
-    /* — convert display-math TikZ to <script type="text/tikz"> — */
-    src = src.replace(
-        /\\\\\[\s*([\s\S]*?\\begin{tikzpicture}[\s\S]*?\\end{tikzpicture})\s*\\\\\]/g,
-        function (_match, tikz){
-            return '<script type="text/tikz">\\n' + tikz + '\\n</script>';
-        });
+    /* TikZ blocks are no longer handled client-side. Authors should embed exported SVGs directly. */
+
+    /* helpers */
+    function escapeHtml(s){
+        return String(s)
+            .replace(/&/g,'&amp;')
+            .replace(/</g,'&lt;')
+            .replace(/>/g,'&gt;')
+            .replace(/"/g,'&quot;')
+            .replace(/'/g,'&#39;');
+    }
+    function normalizeImageUrl(url){
+        url = String(url || '').trim();
+        // allow https/http or site-relative URLs; block javascript: and other schemes
+        if (/^https?:\/\//i.test(url)) return url;
+        if (url.startsWith('/')) return url;
+        return '';
+    }
+
+    /* Image macro: \imgcap{URL}{Caption text}
+       - URL must be https://, http://, or /relative/path
+       - Caption should not contain unmatched braces
+    */
+    src = src.replace(/\\imgcap\{([^}]+)\}\{([^}]+)\}/g, function(_m, rawUrl, rawCaption){
+        var url = normalizeImageUrl(rawUrl);
+        if(!url){
+            // leave a visible placeholder rather than injecting a broken/unsafe tag
+            return '<!-- invalid image url -->';
+        }
+        var cap = escapeHtml(rawCaption);
+        url = escapeHtml(url);
+        return (
+            '<figure class="wiki-figure" style="margin:1rem 0;text-align:center;">' +
+              '<img src="' + url + '" alt="' + cap + '" loading="lazy" decoding="async" ' +
+                   'style="max-width:100%;height:auto;border:1px solid #ddd;background:#fff;border-radius:6px;">' +
+              '<figcaption style="margin-top:.5rem;color:#444;">' + cap + '</figcaption>' +
+            '</figure>'
+        );
+    });
 
     /* internal wiki links */
     src = src.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, function(_m, target, label){
@@ -36,20 +69,18 @@ function latexMarkupToHTML(src){
         .replace(/\\subsection\*?{([^}]+)}/g,'<h3>$1</h3>')
         .replace(/\\subsubsection\*?{([^}]+)}/g,'<h4>$1</h4>')
         .replace(/\\break/g,'<br>')
-        .replace(/\\\\(?=\\s|$)/g,'<br>');
+        .replace(/\\\\(?=\s|$)/g,'<br>');
 }
 
 /* 3. ask MathJax + TikZJax to typeset a container ---- */
 function renderLatex(container){
     if (window.MathJax){
-        MathJax.typesetPromise([container]).then(function(){
-            if (window.TikzJax){ TikzJax.render(container); }
-        });
+        MathJax.typesetPromise([container]);
     }
 }
 
 /* 4. expose helpers on the global object ------------- */
-window.slugify          = slugify;
+window.slugify           = slugify;
 window.latexMarkupToHTML = latexMarkupToHTML;
 window.renderLatex       = renderLatex;
 /* -------------------------------------------------- */
