@@ -241,7 +241,8 @@ export default function Community(){
       if (snap.exists()){
         await deleteDoc(likeRef) // unlike
       } else {
-        await setDoc(likeRef, { createdAt: serverTimestamp() }) // like
+        // Use a real Timestamp so Firestore rules can validate the type (some rule sets reject serverTimestamp()).
+        await setDoc(likeRef, { createdAt: Timestamp.now() }) // like
       }
     }catch(e){
       setActionErr(formatFirebaseError(e))
@@ -585,13 +586,19 @@ function PostCard({ post, onLike, onToggleStar, isStarred, starPending, isSteveA
 
   async function toggleCommentLike(c){
     if (!auth.currentUser){ window.alert('Login first'); return }
-    const uid = auth.currentUser.uid
-    const likeRef = doc(db, `comments/${c.id}/likes/${uid}`)
-    const snap = await getDoc(likeRef)
-    if (snap.exists()){
-      await deleteDoc(likeRef)
-    } else {
-      await setDoc(likeRef, { createdAt: serverTimestamp() })
+    setActionErr('')
+    try{
+      const uid = auth.currentUser.uid
+      const likeRef = doc(db, `comments/${c.id}/likes/${uid}`)
+      const snap = await getDoc(likeRef)
+      if (snap.exists()){
+        await deleteDoc(likeRef)
+      } else {
+        // Use a real Timestamp so Firestore rules can validate the type (some rule sets reject serverTimestamp()).
+        await setDoc(likeRef, { createdAt: Timestamp.now() })
+      }
+    }catch(e){
+      setActionErr(formatFirebaseError(e))
     }
   }
 
