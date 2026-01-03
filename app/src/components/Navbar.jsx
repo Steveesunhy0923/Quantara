@@ -1,6 +1,6 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
-import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore'
+import { collection, doc, getDoc, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { auth, db } from '../lib/firebase'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { usePanels } from './panels/PanelsContext.jsx'
@@ -8,6 +8,8 @@ import { useGamification } from '../hooks/useGamification.js'
 
 export default function Navbar(){
   const [user, setUser] = useState(null)
+  const [profilePhotoURL, setProfilePhotoURL] = useState(null)
+  const [isSteveAdmin, setIsSteveAdmin] = useState(false)
   const navigate = useNavigate()
   const { openPanel, isNarrow } = usePanels()
   const [unreadTotal, setUnreadTotal] = useState(0)
@@ -17,6 +19,38 @@ export default function Navbar(){
     const unsub = onAuthStateChanged(auth, setUser)
     return ()=>unsub()
   },[])
+
+  // stevesunhy admin check (admin claim + profile username)
+  useEffect(()=>{
+    setIsSteveAdmin(false)
+    ;(async()=>{
+      if (!auth.currentUser) return
+      try{
+        const tok = await auth.currentUser.getIdTokenResult(true)
+        const isAdmin = !!tok?.claims?.admin
+        if (!isAdmin) return
+        const snap = await getDoc(doc(db, 'users', auth.currentUser.uid))
+        const uname = snap.data()?.username || ''
+        setIsSteveAdmin(uname === 'stevesunhy')
+      }catch{
+        setIsSteveAdmin(false)
+      }
+    })()
+  },[user?.uid])
+
+  // Prefer the site-set profile photo from Firestore over the provider (Google) photo.
+  useEffect(()=>{
+    setProfilePhotoURL(null)
+    if (!user?.uid) return
+    const ref = doc(db, 'users', user.uid)
+    const unsub = onSnapshot(ref, (snap)=>{
+      const url = snap.data()?.photoURL || null
+      setProfilePhotoURL(url)
+    }, (_e)=>{
+      setProfilePhotoURL(null)
+    })
+    return ()=>unsub()
+  },[user?.uid])
 
   useEffect(()=>{
     setUnreadTotal(0)
@@ -63,6 +97,7 @@ export default function Navbar(){
       <Link to="/challenge">Challenge</Link>
       <Link to="/community">Community</Link>
       <Link to="/archive">Problem&nbsp;Archive</Link>
+      {isSteveAdmin && <Link to="/claims">Claims</Link>}
       <span style={{marginLeft:'auto'}} />
       {!user && (
         <button onClick={()=>navigate('/login')}>Login</button>
@@ -128,7 +163,7 @@ export default function Navbar(){
             aria-label="Open profile"
           >
             <img
-              src={user.photoURL || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28"><rect width="100%" height="100%" fill="%23ccc"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="10" fill="%23666">?</text></svg>'}
+              src={profilePhotoURL || user.photoURL || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28"><rect width="100%" height="100%" fill="%23ccc"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="10" fill="%23666">?</text></svg>'}
               alt="profile"
               style={{width:28,height:28,borderRadius:'50%',display:'block'}}
             />

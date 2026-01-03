@@ -10,18 +10,69 @@ service cloud.firestore {
     }
 
     function isSteveAdmin() {
+      // Avoid crashing if the profile doc or username field is missing.
       return isAdmin()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && ('username' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.username == 'stevesunhy';
     }
 
+    // Some user docs won't have a `banUntil` field. Accessing a missing field can throw in rules,
+    // which would break *all* writes that call isBanned(). Treat missing/invalid banUntil as "not banned".
+    //
+    // NOTE: Firestore Rules is not JavaScript: no `let`, no statement `if`. Use pure expressions only.
     function banUntil(uid) {
-      return get(/databases/$(database)/documents/users/$(uid)).data.banUntil;
+      return exists(/databases/$(database)/documents/users/$(uid))
+        ? (
+            ('banUntil' in get(/databases/$(database)/documents/users/$(uid)).data)
+              ? get(/databases/$(database)/documents/users/$(uid)).data.banUntil
+              : null
+          )
+        : null;
     }
 
     function isBanned(uid) {
-      return exists(/databases/$(database)/documents/users/$(uid))
-        && banUntil(uid) is timestamp
-        && request.time < banUntil(uid);
+      return (banUntil(uid) is timestamp) && (request.time < banUntil(uid));
+    }
+
+    // -----------------------------
+    // Claims / Reports
+    // -----------------------------
+
+    match /claims/{claimId} {
+      // Admin can read all; users can read their own
+      allow read: if isSteveAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isSignedIn()
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.createdAt is timestamp
+                    && request.resource.data.subject is string
+                    && request.resource.data.subject.size() > 0
+                    && request.resource.data.subject.size() <= 180
+                    && request.resource.data.message is string
+                    && request.resource.data.message.size() > 0
+                    && request.resource.data.message.size() <= 8000
+                    // Optional contact email (string)
+                    && (!('email' in request.resource.data) || request.resource.data.email is string);
+      allow update, delete: if false;
+    }
+
+    match /reports/{reportId} {
+      // Admin can read all; reporter can read their own
+      allow read: if isSteveAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isSignedIn()
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.createdAt is timestamp
+                    && request.resource.data.reason is string
+                    && request.resource.data.reason.size() > 0
+                    && request.resource.data.reason.size() <= 2000
+                    && request.resource.data.targetType in ['post','comment','chat','user']
+                    // Proof image URL required
+                    && request.resource.data.proofURL is string
+                    && request.resource.data.proofURL.size() > 0
+                    // Minimal target reference map
+                    && request.resource.data.target is map;
+      // Admin can update status fields if you add them later; keep locked for now.
+      allow update, delete: if false;
     }
 
     function isPinnedForumId(forumId) {
@@ -63,7 +114,193 @@ service cloud.firestore {
 
     match /articles/{id} {
       allow read: if true;
-      allow create, update, delete: if canEditWiki();
+      function safeDifficulty(d){
+        return (d is int || d is float) && d >= 0 && d <= 100;
+      }
+
+      function difficultyChanged(){
+        // request.resource.data is the post-write document (including merge semantics).
+        return ('difficulty' in request.resource.data)
+          && (
+            !('difficulty' in resource.data)
+            || request.resource.data.difficulty != resource.data.difficulty
+          );
+      }
+
+      allow create: if canEditWiki()
+                    && ('difficulty' in request.resource.data)
+                    && safeDifficulty(request.resource.data.difficulty);
+
+      allow update: if canEditWiki()
+                    // If difficulty changes, require admin claim.
+                    && (!difficultyChanged() || isAdmin())
+                    // If present, difficulty must be valid.
+                    && (!('difficulty' in request.resource.data) || safeDifficulty(request.resource.data.difficulty));
+
+      allow delete: if canEditWiki();
+    }
+
+    // -----------------------------
+    // Wiki tags: per-user votes
+    // articles/{id}/tagVotes/{uid} -> { tags: [string], updatedAt: timestamp }
+    // Anyone can read; only the signed-in user can write their own vote doc.
+    // -----------------------------
+    match /articles/{id}/tagVotes/{uid} {
+      allow read: if true;
+
+      function isOwner(){
+        return isSignedIn() && request.auth.uid == uid;
+      }
+
+      function isValidTag(t){
+        // Keep tags short and simple for UI.
+        // Allow letters/numbers/spaces/dashes.
+        return t is string
+          && t.size() >= 1
+          && t.size() <= 24
+          && t.matches('^[A-Za-z0-9][A-Za-z0-9 \\-]*$');
+      }
+
+      function isValidTagList(tags){
+        // Avoid using `list.all(...)` because the Firebase Rules Playground has been observed
+        // to throw "Invalid argument provided to call. Function: [all]" for some inputs.
+        // Validate up to 12 tags with explicit index checks.
+        return (tags is list)
+          && tags.size() >= 0
+          && tags.size() <= 12
+          && (
+            tags.size() == 0 ||
+            (
+              isValidTag(tags[0]) &&
+              (
+                tags.size() == 1 ||
+                (
+                  isValidTag(tags[1]) &&
+                  (
+                    tags.size() == 2 ||
+                    (
+                      isValidTag(tags[2]) &&
+                      (
+                        tags.size() == 3 ||
+                        (
+                          isValidTag(tags[3]) &&
+                          (
+                            tags.size() == 4 ||
+                            (
+                              isValidTag(tags[4]) &&
+                              (
+                                tags.size() == 5 ||
+                                (
+                                  isValidTag(tags[5]) &&
+                                  (
+                                    tags.size() == 6 ||
+                                    (
+                                      isValidTag(tags[6]) &&
+                                      (
+                                        tags.size() == 7 ||
+                                        (
+                                          isValidTag(tags[7]) &&
+                                          (
+                                            tags.size() == 8 ||
+                                            (
+                                              isValidTag(tags[8]) &&
+                                              (
+                                                tags.size() == 9 ||
+                                                (
+                                                  isValidTag(tags[9]) &&
+                                                  (
+                                                    tags.size() == 10 ||
+                                                    (
+                                                      isValidTag(tags[10]) &&
+                                                      (
+                                                        tags.size() == 11 ||
+                                                        isValidTag(tags[11])
+                                                      )
+                                                    )
+                                                  )
+                                                )
+                                              )
+                                            )
+                                          )
+                                        )
+                                      )
+                                    )
+                                  )
+                                )
+                              )
+                            )
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          );
+      }
+
+      function hasValidUpdatedAt(){
+        // `serverTimestamp()` evaluates to request.time in rules.
+        // Allow missing (clients may omit) or a real timestamp.
+        return !('updatedAt' in request.resource.data)
+          || request.resource.data.updatedAt == request.time
+          || request.resource.data.updatedAt is timestamp;
+      }
+
+      allow create: if isOwner()
+                    && ('tags' in request.resource.data)
+                    && isValidTagList(request.resource.data.tags)
+                    && hasValidUpdatedAt();
+
+      allow update: if isOwner()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['tags','updatedAt'])
+                    && ('tags' in request.resource.data)
+                    && isValidTagList(request.resource.data.tags)
+                    && hasValidUpdatedAt();
+
+      allow delete: if false;
+    }
+
+    // -----------------------------
+    // Wiki difficulty ratings: per-user rating (0–100)
+    // articles/{id}/difficultyRatings/{uid} -> { rating: number, updatedAt?: timestamp, createdAt?: timestamp }
+    // Anyone can read; only the signed-in user can write their own rating doc.
+    // Aggregate (avg/count) is maintained on the parent article doc by Cloud Functions.
+    // -----------------------------
+    match /articles/{id}/difficultyRatings/{uid} {
+      allow read: if true;
+
+      function isOwner(){
+        return isSignedIn() && request.auth.uid == uid;
+      }
+
+      function safeRating(r){
+        return (r is int || r is float) && r >= 0 && r <= 100;
+      }
+
+      function hasValidUpdatedAt(){
+        // `serverTimestamp()` evaluates to request.time in rules.
+        // Allow missing (clients may omit) or a real timestamp.
+        return !('updatedAt' in request.resource.data)
+          || request.resource.data.updatedAt == request.time
+          || request.resource.data.updatedAt is timestamp;
+      }
+
+      allow create: if isOwner()
+                    && ('rating' in request.resource.data)
+                    && safeRating(request.resource.data.rating)
+                    && hasValidUpdatedAt()
+                    && (!('createdAt' in request.resource.data) || request.resource.data.createdAt is timestamp);
+
+      allow update: if isOwner()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating','updatedAt','createdAt'])
+                    && ('rating' in request.resource.data)
+                    && safeRating(request.resource.data.rating)
+                    && hasValidUpdatedAt()
+                    && (!('createdAt' in request.resource.data) || request.resource.data.createdAt is timestamp);
+
+      allow delete: if false;
     }
 
     // Community posts
@@ -460,17 +697,168 @@ service cloud.firestore {
     // Daily Challenge
     // -----------------------------
 
-    // Public read of the day’s challenge doc (answer is encrypted server-side).
-    // No direct client writes; Cloud Functions (Admin SDK) bypass rules.
+    // Public read of daily challenge docs (answer is encrypted server-side).
+    // No direct client writes for problems/submissions/picks; Cloud Functions (Admin SDK) bypass rules.
     match /dailyChallenges/{dateKey} {
       allow read: if true;
       allow create, update, delete: if false;
 
-      match /submissions/{uid} {
+      // New model: problems are stored per difficulty level:
+      // dailyChallenges/{dateKey}/levels/{levelKey}
+      match /levels/{levelKey} {
+        allow read: if true;
+        allow write: if false;
+
+        function levelDoc(){
+          return get(/databases/$(database)/documents/dailyChallenges/$(dateKey)/levels/$(levelKey));
+        }
+
+        function deadlineAt(){
+          return ('deadlineAt' in levelDoc().data) ? levelDoc().data.deadlineAt : null;
+        }
+
+        function afterDeadline(){
+          return (deadlineAt() is timestamp) && (request.time >= deadlineAt());
+        }
+
         // Submissions are handled via callable function; keep these private by default.
+        match /submissions/{uid} {
         allow read: if false;
+          allow write: if false;
+        }
+
+        // Community + official solutions.
+        // Stored by concept key (unique per dateKey+levelKey).
+        // dailyChallenges/{dateKey}/levels/{levelKey}/solutions/{solutionId}
+        match /solutions/{solutionId} {
+          function isOwner(){
+            return isSignedIn()
+              && ('createdBy' in resource.data)
+              && resource.data.createdBy == request.auth.uid;
+          }
+
+          function isApproved(){
+            return ('approved' in resource.data) && resource.data.approved == true;
+          }
+
+          // Visibility:
+          // - Always visible to admins and the solution owner
+          // - Visible to everyone else only after the deadline AND after admin approval
+          allow read: if isAdmin() || isOwner() || (afterDeadline() && isApproved());
+
+          function isValidBlock(b){
+            return b is map
+              && ('type' in b)
+              && (
+                (b.type == 'text'
+                  && ('text' in b)
+                  && b.text is string
+                  && b.text.size() >= 0
+                  && b.text.size() <= 8000
+                )
+                ||
+                (b.type == 'image'
+                  && ('imageURL' in b)
+                  && b.imageURL is string
+                  && b.imageURL.size() > 0
+                  && b.imageURL.size() <= 2000
+                  && (!('caption' in b) || (b.caption is string && b.caption.size() <= 200))
+                )
+              );
+          }
+
+          function isValidBlocks(blocks){
+            // Avoid `list.all(...)` due to Rules Playground issues.
+            // Cap at 12 blocks for now (enough for alternating text/image).
+            return (blocks is list)
+              && blocks.size() >= 1
+              && blocks.size() <= 12
+              && (
+                blocks.size() == 1 ? isValidBlock(blocks[0]) :
+                blocks.size() == 2 ? (isValidBlock(blocks[0]) && isValidBlock(blocks[1])) :
+                blocks.size() == 3 ? (isValidBlock(blocks[0]) && isValidBlock(blocks[1]) && isValidBlock(blocks[2])) :
+                blocks.size() == 4 ? (isValidBlock(blocks[0]) && isValidBlock(blocks[1]) && isValidBlock(blocks[2]) && isValidBlock(blocks[3])) :
+                blocks.size() == 5 ? (isValidBlock(blocks[0]) && isValidBlock(blocks[1]) && isValidBlock(blocks[2]) && isValidBlock(blocks[3]) && isValidBlock(blocks[4])) :
+                blocks.size() == 6 ? (isValidBlock(blocks[0]) && isValidBlock(blocks[1]) && isValidBlock(blocks[2]) && isValidBlock(blocks[3]) && isValidBlock(blocks[4]) && isValidBlock(blocks[5])) :
+                blocks.size() == 7 ? (isValidBlock(blocks[0]) && isValidBlock(blocks[1]) && isValidBlock(blocks[2]) && isValidBlock(blocks[3]) && isValidBlock(blocks[4]) && isValidBlock(blocks[5]) && isValidBlock(blocks[6])) :
+                blocks.size() == 8 ? (isValidBlock(blocks[0]) && isValidBlock(blocks[1]) && isValidBlock(blocks[2]) && isValidBlock(blocks[3]) && isValidBlock(blocks[4]) && isValidBlock(blocks[5]) && isValidBlock(blocks[6]) && isValidBlock(blocks[7])) :
+                blocks.size() == 9 ? (isValidBlock(blocks[0]) && isValidBlock(blocks[1]) && isValidBlock(blocks[2]) && isValidBlock(blocks[3]) && isValidBlock(blocks[4]) && isValidBlock(blocks[5]) && isValidBlock(blocks[6]) && isValidBlock(blocks[7]) && isValidBlock(blocks[8])) :
+                blocks.size() == 10 ? (isValidBlock(blocks[0]) && isValidBlock(blocks[1]) && isValidBlock(blocks[2]) && isValidBlock(blocks[3]) && isValidBlock(blocks[4]) && isValidBlock(blocks[5]) && isValidBlock(blocks[6]) && isValidBlock(blocks[7]) && isValidBlock(blocks[8]) && isValidBlock(blocks[9])) :
+                blocks.size() == 11 ? (isValidBlock(blocks[0]) && isValidBlock(blocks[1]) && isValidBlock(blocks[2]) && isValidBlock(blocks[3]) && isValidBlock(blocks[4]) && isValidBlock(blocks[5]) && isValidBlock(blocks[6]) && isValidBlock(blocks[7]) && isValidBlock(blocks[8]) && isValidBlock(blocks[9]) && isValidBlock(blocks[10])) :
+                (isValidBlock(blocks[0]) && isValidBlock(blocks[1]) && isValidBlock(blocks[2]) && isValidBlock(blocks[3]) && isValidBlock(blocks[4]) && isValidBlock(blocks[5]) && isValidBlock(blocks[6]) && isValidBlock(blocks[7]) && isValidBlock(blocks[8]) && isValidBlock(blocks[9]) && isValidBlock(blocks[10]) && isValidBlock(blocks[11]))
+              );
+          }
+
+          function isValidSolution(){
+            return request.resource.data.concept is string
+              && request.resource.data.concept.size() >= 2
+              && request.resource.data.concept.size() <= 60
+              && request.resource.data.conceptKey is string
+              && request.resource.data.conceptKey == solutionId
+              && request.resource.data.conceptKey.size() >= 2
+              && request.resource.data.conceptKey.size() <= 64
+              && ('blocks' in request.resource.data)
+              && isValidBlocks(request.resource.data.blocks)
+              && request.resource.data.createdBy == request.auth.uid
+              && request.resource.data.createdAt is timestamp
+              // Approval fields:
+              && ('approved' in request.resource.data)
+              && request.resource.data.approved is bool
+              && (!request.resource.data.approved || isAdmin());
+          }
+
+          // Reserve solutionId="official" for admins.
+          allow create: if isSignedIn()
+                        && (solutionId != 'official' || isAdmin())
+                        && (afterDeadline() || isAdmin())
+                        && isValidSolution();
+
+          allow update: if isSignedIn()
+                        && (isOwner() || isAdmin())
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                          'concept','conceptKey','blocks','updatedAt',
+                          'approved','approvedAt','approvedBy'
+                        ])
+                        && request.resource.data.conceptKey == solutionId
+                        && ('blocks' in request.resource.data)
+                        && isValidBlocks(request.resource.data.blocks)
+                        // Owners can edit only while unapproved (keeps admin verification meaningful).
+                        && (
+                          isAdmin()
+                          || (
+                            isOwner()
+                            && (!('approved' in resource.data) || resource.data.approved == false)
+                            && (!('approved' in request.resource.data) || request.resource.data.approved == false)
+                          )
+                        );
+
+          allow delete: if isSignedIn()
+                        && (
+                          isAdmin()
+                          || (isOwner() && (!('approved' in resource.data) || resource.data.approved == false))
+                        );
+        }
+      }
+
+      // Per-user daily difficulty pick (readable by owner; written by Cloud Functions only).
+      match /userPicks/{uid} {
+        allow read: if isSignedIn() && request.auth.uid == uid;
         allow write: if false;
       }
+    }
+
+    // Daily edit requests (admin verification workflow).
+    // dailyEditRequests/{id} created by users; approved/rejected by admins via Cloud Functions (Admin SDK).
+    match /dailyEditRequests/{id} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.createdBy == request.auth.uid);
+      allow create: if isSignedIn()
+                    && request.resource.data.createdBy == request.auth.uid
+                    && request.resource.data.createdAt is timestamp
+                    && request.resource.data.kind in ['problem','solution']
+                    && request.resource.data.dateKey is string
+                    && request.resource.data.levelKey is string
+                    && request.resource.data.status == 'pending';
+      allow update, delete: if false;
     }
 
     // Leaderboard stats: public read; no direct client writes.
@@ -483,6 +871,17 @@ service cloud.firestore {
         allow write: if false;
       }
     }
+
+    // New per-difficulty leaderboards (written by Cloud Functions; public read of summary).
+    match /challengeStatsLevels/{levelKey}/users/{uid} {
+      allow read: if true;
+      allow write: if false;
+
+      match /days/{dateKey} {
+        allow read: if false;
+        allow write: if false;
+      }
+    }
     
   }
-  }
+}

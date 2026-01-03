@@ -23,6 +23,11 @@
     }
   })();
 </script>
+<!--
+  Dev note:
+  - If you open this file directly (file://), Firestore writes may behave differently and App Check won't run.
+  - Prefer running the Vite app in /app and use http://localhost:5173/new instead.
+-->
 <h2>New Post</h2>
 <form id="postForm">
     <input name="title" placeholder="Title" required style="width:100%;font-size:1.1rem"><br>
@@ -42,16 +47,25 @@
         const usr= await db.doc(`users/${u.uid}`).get();
 
         // create post first to get postId
+        // NOTE: Firestore rules now require: bigCategory (string), channel (string), subjects (list>=1).
+        // Keep legacy `discussion` for older feed filters, but also write the new fields.
+        const channel = String(this.discussion.value || '').trim();
         const base = {
             title:this.title.value,
             post:this.post.value,
-            discussion:this.discussion.value,
+            // Legacy field (older clients/pages filter by this)
+            discussion: channel,
+            // New forum model (required by current Firestore rules)
+            bigCategory: 'Discussion',
+            channel,
+            subjects: [channel],
             time:firebase.firestore.FieldValue.serverTimestamp(),
             likes:0,
             comments:0,
+            starCount: 0,
             author:u.uid,
             authorName: usr.data().username,
-            authorPhoto: usr.data().photoURL || 'https://via.placeholder.com/24',
+            authorPhoto: (usr.data() && usr.data().photoURL) || 'https://via.placeholder.com/24',
             hasImages:false
         };
 

@@ -18,7 +18,7 @@ export function formatFirebaseError(e){
       const hasAppCheckError = !!appCheckCode
       // Only blame App Check when it actually looks broken (missing token or explicit appCheck/* error).
       if (st?.enabled && (!hasToken || appCheckCode.startsWith('appCheck/'))){
-        return `${base} (Likely App Check is failing: ${hasAppCheckError ? appCheckCode : 'no token'}. Check Firebase Console → App Check enforcement + your reCAPTCHA v3 site key allowed domains; also try disabling ad blockers.)`
+        return `${base} (App Check may be involved: ${hasAppCheckError ? appCheckCode : 'no token yet'}. If App Check enforcement is enabled for this API, missing/invalid tokens will cause permission-denied. Check Firebase Console → App Check settings + your reCAPTCHA v3 site key allowed domains; also try disabling ad blockers.)`
       }
     }catch(_e){
       // ignore

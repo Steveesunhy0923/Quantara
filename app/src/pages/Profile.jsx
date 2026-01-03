@@ -202,7 +202,7 @@ export default function Profile(){
         )}
       </div>
 
-      {editable && profile.username === 'stevesunhy' && (
+      {editable && (
         <div style={{marginTop:26, padding:12, border:'1px solid #f59e0b', borderRadius:12, background:'rgba(245,158,11,.08)'}}>
           <h3 style={{marginTop:0}}>Admin: Add achievement</h3>
           <div style={{display:'grid', gap:8}}>

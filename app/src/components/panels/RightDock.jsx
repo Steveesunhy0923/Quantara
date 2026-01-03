@@ -8,6 +8,7 @@ import SharePanel from './tools/SharePanel.jsx'
 import GroupCreatePanel from './tools/GroupCreatePanel.jsx'
 import GroupInvitePanel from './tools/GroupInvitePanel.jsx'
 import GroupMembersPanel from './tools/GroupMembersPanel.jsx'
+import ReportPanel from './tools/ReportPanel.jsx'
 
 function PanelFrame({ title, onClose, canGoBack, onBack, children }){
   return (
@@ -58,6 +59,9 @@ function renderPanel(panel){
   if (panel.type === 'groupMembers'){
     return <GroupMembersPanel {...panel.props} />
   }
+  if (panel.type === 'report'){
+    return <ReportPanel {...panel.props} />
+  }
   return <div style={{padding:12}}>Unknown panel: {panel.type}</div>
 }
 
@@ -103,12 +107,15 @@ export default function RightDock(){
     borderLeft: hasDock ? '1px solid #e5e5e5' : 'none',
     background:'#fff',
     display: hasDock ? 'flex' : 'none',
-    position:'sticky',
+    // Overlay mode: don't steal layout width from the page.
+    // This prevents the Wiki Iceberg (and other content) from being squeezed when chat is open.
+    position:'fixed',
+    right: 0,
     top: 'var(--topbar-h, 0px)',
     minHeight:0,
     height:'calc(100vh - var(--topbar-h, 0px))',
     maxHeight:'calc(100vh - var(--topbar-h, 0px))',
-    alignSelf:'flex-start',
+    zIndex: 3500,
   }),[hasDock, dockWidthPct])
 
   if (!hasDock) return null

@@ -1,0 +1,7 @@
+name = "math-website"
+compatibility_date = "2025-12-31"
+
+# Deploy the Vite build output as static assets.
+assets = { directory = "./dist" }
+
+

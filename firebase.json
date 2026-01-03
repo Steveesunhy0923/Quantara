@@ -10,31 +10,6 @@
       "**/node_modules/**"
     ],
     "rewrites": [
-      { "source": "/api/chatMarkRead", "function": "chatMarkRead" },
-      { "source": "/api/groupCreate", "function": "groupCreate" },
-      { "source": "/api/groupInvite", "function": "groupInvite" },
-      { "source": "/api/groupRemoveMember", "function": "groupRemoveMember" },
-      { "source": "/api/groupSetAdmin", "function": "groupSetAdmin" },
-      { "source": "/api/groupSetPhoto", "function": "groupSetPhoto" },
-
-      { "source": "/api/gamificationEnsure", "function": "gamificationEnsure" },
-      { "source": "/api/gamificationAddXp", "function": "gamificationAddXp" },
-      { "source": "/api/gamificationEquipBadge", "function": "gamificationEquipBadge" },
-      { "source": "/api/gamificationDailyCheckIn", "function": "gamificationDailyCheckIn" },
-      { "source": "/api/gamificationAdminAddAchievement", "function": "gamificationAdminAddAchievement" },
-      { "source": "/api/gamificationDebugGrantAchievement", "function": "gamificationDebugGrantAchievement" },
-      { "source": "/api/gamificationDebugGrantBadge", "function": "gamificationDebugGrantBadge" },
-
-      { "source": "/api/challengeUpsertDaily", "function": "challengeUpsertDaily" },
-      { "source": "/api/challengeSubmitDaily", "function": "challengeSubmitDaily" },
-      { "source": "/api/challengeRevealDaily", "function": "challengeRevealDaily" },
-
-      { "source": "/api/setAdmin", "function": "setAdmin" },
-      { "source": "/api/verifyAdmin", "function": "verifyAdmin" },
-
-      { "source": "/api/wikiCreate", "function": "wikiCreate" },
-      { "source": "/api/wikiUpdate", "function": "wikiUpdate" },
-      { "source": "/api/wikiDelete", "function": "wikiDelete" },
       { "source": "**", "destination": "/index.html" }
     ]
   },

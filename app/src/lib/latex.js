@@ -1,5 +1,19 @@
 export function slugify(str){
-  return encodeURIComponent(str.trim().toLowerCase().replace(/\s+/g,'-'))
+  // Generate a URL-safe slug WITHOUT percent-encoding.
+  // react-router params are decoded; storing encoded slugs (with %xx) breaks lookups.
+  let s = String(str || '').trim().toLowerCase()
+  try{
+    // Remove diacritics (NFKD) if supported.
+    s = s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+  }catch(_e){}
+  s = s
+    .replace(/['’]/g, '')        // drop apostrophes
+    .replace(/&/g, ' and ')      // keep meaning
+    .replace(/[^a-z0-9]+/g, '-') // collapse non-url chars to '-'
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+  return s || 'article'
 }
 
 export function latexMarkupToHTML(src){
@@ -20,25 +34,48 @@ export function latexMarkupToHTML(src){
     return ''
   }
 
-  // Convert display TikZ blocks like \[ ... \begin{tikzpicture} ... \end{tikzpicture} ... \]
-  src = src.replace(/\\\\\[\s*([\s\S]*?\\begin{tikzpicture}[\s\S]*?\\end{tikzpicture})\s*\\\\\]/g, (_m, tikz) => {
-    return '<script type="text/tikz">\n' + tikz + '\n</script>'
-  })
+  // TikZ: wrap any \begin{tikzpicture}...\end{tikzpicture} blocks so TikZJax can render them.
+  // Important: avoid regex lookbehind / overly-greedy patterns that can break the whole transform.
+  function protectExistingTikzScripts(input){
+    const scripts = []
+    let out = String(input || '')
+    out = out.replace(/<script\s+type="text\/tikz">[\s\S]*?<\/script>/gi, (m)=>{
+      scripts.push(m)
+      return `__TIKZ_SCRIPT_${scripts.length - 1}__`
+    })
+    return { out, scripts }
+  }
+  function restoreTikzScripts(input, scripts){
+    let out = String(input || '')
+    for (let i = 0; i < scripts.length; i++){
+      out = out.replaceAll(`__TIKZ_SCRIPT_${i}__`, scripts[i])
+    }
+    return out
+  }
+  const protectedTikz = protectExistingTikzScripts(src)
+  protectedTikz.out = protectedTikz.out.replace(
+    /\\begin\{tikzpicture\}[\s\S]*?\\end\{tikzpicture\}/g,
+    (tikz)=>`<script type="text/tikz">\n${tikz}\n</script>`
+  )
+  src = restoreTikzScripts(protectedTikz.out, protectedTikz.scripts)
 
-  // Also wrap bare tikzpicture environments that are not already inside a <script type="text/tikz">
-  src = src.replace(/(?<!<script type="text\/tikz">)[\s\S]*?(\\begin{tikzpicture}[\s\S]*?\\end{tikzpicture})/g, (m) => {
-    // if there is already a script tag inside this match, skip
-    if (m.includes('<script type="text/tikz">')) return m
-    const tikz = m.match(/(\\begin{tikzpicture}[\s\S]*?\\end{tikzpicture})/)
-    if (!tikz) return m
-    return m.replace(tikz[1], '<script type="text/tikz">\n'+tikz[1]+'\n</script>')
-  })
+  // LaTeX center environment (commonly used around TikZ).
+  // We can't rely on MathJax to handle this (it's not inside math delimiters),
+  // so convert it to HTML centering.
+  src = src
+    // Use a flex column so block children (like TikZJax's fixed-width div) are truly centered.
+    .replace(
+      /\\begin\{center\}/g,
+      '<div class="latex-center" style="display:flex;flex-direction:column;align-items:center;text-align:center;">'
+    )
+    .replace(/\\end\{center\}/g, '</div>')
 
   // Internal wiki links [[Target|Label]]
   src = src.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, target, label) => {
     const slug = slugify(target)
     const text = label || target
-    return '<a class="wiki-link" href="#'+slug+'">'+text+'</a>'
+    // Use real SPA route; other pages can still navigate via normal link if needed.
+    return '<a class="wiki-link" href="/wiki/'+encodeURIComponent(slug)+'">'+text+'</a>'
   })
 
   // Image macro: \imgcap{URL}{Caption text}
@@ -58,17 +95,98 @@ export function latexMarkupToHTML(src){
     )
   })
 
-  // simple transforms
-  src = src.replace(/\\textbf{([^}]+)}/g,'<strong>$1</strong>')
+  // -----------------------------
+  // Balanced-brace transforms
+  // (Avoid naive `[^}]` regexes; they break on content like \mathbb{N} inside headings/text.)
+  // -----------------------------
+  function replaceMacroBalanced(input, macro, renderInner){
+    const s = String(input || '')
+    const needle = `\\${macro}{`
+    let out = ''
+    let i = 0
+    let guard = 0
+    while (i < s.length && guard++ < 20000){
+      const j = s.indexOf(needle, i)
+      if (j === -1){
+        out += s.slice(i)
+        break
+      }
+      out += s.slice(i, j)
+      let k = j + needle.length
+      let depth = 1
+      while (k < s.length && depth > 0){
+        const ch = s[k]
+        if (ch === '{') depth++
+        else if (ch === '}') depth--
+        k++
+      }
+      if (depth !== 0){
+        // Unbalanced braces; give up and append the rest unchanged.
+        out += s.slice(j)
+        break
+      }
+      const inner = s.slice(j + needle.length, k - 1)
+      out += renderInner(inner)
+      i = k
+    }
+    return out
+  }
+
+  function replaceSectionLike(input, cmd, tag){
+    // Handles \section{...} and \section*{...}
+    const s = String(input || '')
+    const variants = [`\\${cmd}{`, `\\${cmd}*{`]
+    let out = ''
+    let i = 0
+    let guard = 0
+    while (i < s.length && guard++ < 20000){
+      let j = -1
+      let needle = ''
+      for (const v of variants){
+        const idx = s.indexOf(v, i)
+        if (idx !== -1 && (j === -1 || idx < j)){
+          j = idx
+          needle = v
+        }
+      }
+      if (j === -1){
+        out += s.slice(i)
+        break
+      }
+      out += s.slice(i, j)
+      let k = j + needle.length
+      let depth = 1
+      while (k < s.length && depth > 0){
+        const ch = s[k]
+        if (ch === '{') depth++
+        else if (ch === '}') depth--
+        k++
+      }
+      if (depth !== 0){
+        out += s.slice(j)
+        break
+      }
+      const inner = s.slice(j + needle.length, k - 1)
+      out += `<${tag}>${inner}</${tag}>`
+      i = k
+    }
+    return out
+  }
+
+  // simple transforms (balanced)
+  src = replaceMacroBalanced(src, 'textbf', (inner)=>`<strong>${inner}</strong>`)
+  src = replaceMacroBalanced(src, 'emph', (inner)=>`<em>${inner}</em>`)
+  src = replaceMacroBalanced(src, 'textit', (inner)=>`<em>${inner}</em>`)
   src = src.replace(/\\begin{itemize}([\s\S]*?)\\end{itemize}/g, (_m, inner) => {
     const items = inner.split(/\\item/).filter(s=>s.trim())
     return '<ul>'+items.map(s=>'\n<li>'+s.trim()+'</li>').join('')+'\n</ul>'
   })
 
+  src = replaceSectionLike(src, 'section', 'h2')
+  src = replaceSectionLike(src, 'subsection', 'h3')
+  src = replaceSectionLike(src, 'subsubsection', 'h4')
+
   return src
-    .replace(/\\section\*?{([^}]+)}/g,'<h2>$1</h2>')
-    .replace(/\\subsection\*?{([^}]+)}/g,'<h3>$1</h3>')
-    .replace(/\\subsubsection\*?{([^}]+)}/g,'<h4>$1</h4>')
     .replace(/\\break/g,'<br>')
     .replace(/\\\\(?=\s|$)/g,'<br>')
 }
@@ -91,7 +209,56 @@ export async function renderLatex(container){
       // If MathJax isn't ready yet, skip; next render will try again.
     }
   }
-  if (window.TikzJax){
-    window.TikzJax.render(container)
+  const TJ = window.TikzJax
+  // TikZJax: ensure it's initialized (some builds expose tikzLoad()) and then process new scripts.
+  try{
+    if (typeof window.tikzLoad === 'function'){
+      // Initialize once; concurrent calls share the same promise.
+      if (!window.__tikzLoadPromise){
+        window.__tikzLoadPromise = window.tikzLoad().catch(()=>null)
+      }
+      await window.__tikzLoadPromise
+    }
+  }catch(_e){}
+
+  // Preferred path for our vendored legacy TikZJax build: it exposes window.process_tikz(element)
+  // which converts a <script type="text/tikz">...</script> into an SVG container.
+  try{
+    if (typeof window.process_tikz === 'function' && container){
+      const scripts = Array.from(container.querySelectorAll?.('script[type="text/tikz"]') || [])
+      // Process sequentially (renderer is wasm-heavy and the legacy code expects a chain).
+      for (const s of scripts){
+        try{ await window.process_tikz(s) }catch(_e){}
+      }
+      return
+    }
+  }catch(_e){}
+
+  if (TJ){
+    // TikZJax API differs across builds; support common entrypoints.
+    try{
+      if (typeof TJ.render === 'function'){
+        const r = TJ.render(container)
+        if (r && typeof r.then === 'function') await r
+        return
+      }
+      if (typeof TJ.process === 'function'){
+        // Some versions accept an element; others process the whole document.
+        try{
+          const r = TJ.process(container)
+          if (r && typeof r.then === 'function') await r
+        }catch(_e){
+          const r2 = TJ.process()
+          if (r2 && typeof r2.then === 'function') await r2
+        }
+        return
+      }
+      if (typeof TJ.typeset === 'function'){
+        const r = TJ.typeset(container)
+        if (r && typeof r.then === 'function') await r
+      }
+    }catch(_e){
+      // Best-effort: ignore TikZ errors so they don't break MathJax rendering.
+    }
   }
 }

@@ -6,9 +6,11 @@ import { extractFirstUrl } from '../panelUtils.js'
 import { adminDeleteComment } from '../../../lib/moderation.js'
 import { formatFirebaseError } from '../../../lib/errors.js'
 import { DEFAULT_AVATAR_URL } from '../../../lib/placeholders.js'
+import { usePanels } from '../PanelsContext.jsx'
 
 export default function CommentsPanel({ postId, postTitle }){
   const navigate = useNavigate()
+  const { openPanel } = usePanels()
   const [items, setItems] = useState([])
   const [text, setText] = useState('')
   const [err, setErr] = useState('')
@@ -168,6 +170,26 @@ export default function CommentsPanel({ postId, postTitle }){
               </button>
               {c.pinned && <span style={{fontSize:'.8rem', color:'#8a4b00'}}>Pinned</span>}
               <span style={{marginLeft:'auto'}} />
+              {!!auth.currentUser && auth.currentUser.uid !== c.author && (
+                <button
+                  type="button"
+                  onClick={()=>{
+                    openPanel('report', {
+                      title: 'Report comment',
+                      props: {
+                        targetType: 'comment',
+                        target: { commentId: c.id, postId, authorUid: c.author || null },
+                        suggestedText: String(c.content || '').slice(0, 240),
+                      },
+                      replaceAll: false,
+                      pushHistory: true,
+                    })
+                  }}
+                  title="Report comment"
+                >
+                  🚩
+                </button>
+              )}
               {!!auth.currentUser && (auth.currentUser.uid === c.author || isSteveAdmin) && (
                 <button type="button" onClick={()=>deleteComment(c)} title="Delete comment">🗑️</button>
               )}

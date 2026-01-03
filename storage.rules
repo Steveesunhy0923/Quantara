@@ -63,6 +63,19 @@ service firebase.storage {
       allow delete: if request.auth != null && request.auth.token.admin == true;
     }
 
+    // Daily challenge solutions images: public read; owner-only writes.
+    // Used by community solutions in the Problem Archive.
+    match /dailySolutions/{userId}/{dateKey}/{levelKey}/{conceptKey}/{allPaths=**} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+                   && request.auth.uid == userId
+                            && request.resource != null
+                   && request.resource.size < 5 * 1024 * 1024
+                            && request.resource.contentType != null
+                            && request.resource.contentType.matches('image/(png|jpeg|jpg|pjpeg|webp|gif)');
+      allow delete: if request.auth != null && request.auth.uid == userId;
+    }
+
     // Chat media (images): authenticated read; owner-only writes.
     // Note: Storage rules can't easily check Firestore chat membership, so this is "auth-only read".
     match /chatMedia/{userId}/{chatId}/{allPaths=**} {
@@ -74,6 +87,30 @@ service firebase.storage {
                             && request.resource.contentType != null
                             && request.resource.contentType.matches('image/(png|jpeg|jpg|pjpeg|webp|gif)');
       allow delete: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Reports proof images: readable by reporter + admin; writer is reporter only.
+    match /reports/{userId}/{reportId}/{allPaths=**} {
+      allow read: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
+      allow create, update: if request.auth != null
+                   && request.auth.uid == userId
+                            && request.resource != null
+                   && request.resource.size < 10 * 1024 * 1024
+                            && request.resource.contentType != null
+                            && request.resource.contentType.matches('image/(png|jpeg|jpg|pjpeg|webp|gif)');
+      allow delete: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
+    }
+
+    // Claims attachments (optional): readable by submitter + admin; writer is submitter only.
+    match /claims/{userId}/{claimId}/{allPaths=**} {
+      allow read: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
+      allow create, update: if request.auth != null
+                   && request.auth.uid == userId
+                            && request.resource != null
+                   && request.resource.size < 10 * 1024 * 1024
+                            && request.resource.contentType != null
+                            && request.resource.contentType.matches('image/(png|jpeg|jpg|pjpeg|webp|gif)');
+      allow delete: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
     }
   }
 }

@@ -7,6 +7,12 @@ yarn-error.log*
 firebase-debug.log*
 firebase-debug.*.log*
 
+# OS / editor junk
+.DS_Store
+**/.DS_Store
+.idea/
+.vscode/
+
 # Firebase cache
 .firebase/
 
@@ -46,6 +52,12 @@ build/Release
 
 # Dependency directories
 node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+**/dist/
+**/dist-ssr/
 
 # Optional npm cache directory
 .npm

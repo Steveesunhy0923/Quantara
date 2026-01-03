@@ -17,7 +17,8 @@
       };
     </script>
     <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/tikzjax@1.0.4/tikzjax.min.js" onload="window.TikzJax && window.TikzJax.config({lazy:false, wasmURL: 'https://cdn.jsdelivr.net/npm/tikzjax@1.0.4/tikzjax.wasm'})"></script>
+    <!-- TikZ renderer (vendored; the previous jsDelivr URL was 404 so TikZJax never loaded) -->
+    <script defer src="/vendor/tikz/tikzjax.js"></script>
   </head>
   <body>
     <div id="root">

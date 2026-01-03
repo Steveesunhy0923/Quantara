@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate, Link } from 'react-router-dom'
 import './App.css'
+import Home from './pages/Home.jsx'
 import Wiki from './pages/Wiki.jsx'
 import Community from './pages/Community.jsx'
 import Login from './pages/Login.jsx'
@@ -11,6 +12,8 @@ import ChallengeLeaderboard from './pages/ChallengeLeaderboard.jsx'
 import AdminClaim from './pages/AdminClaim.jsx'
 import PostPage from './pages/Post.jsx'
 import ProblemArchive from './pages/ProblemArchive.jsx'
+import Contact from './pages/Contact.jsx'
+import Claims from './pages/Claims.jsx'
 import Navbar from './components/Navbar.jsx'
 import ArithmeticGame from './pages/ArithmeticGame.jsx'
 import FunctionBallGame from './pages/FunctionBallGame.jsx'
@@ -29,12 +32,14 @@ function App() {
         <div className="workspace">
           <div className="workspace-left" id="main">
             <Routes>
-              <Route path="/" element={<Navigate to="/wiki" replace />} />
+              <Route path="/" element={<Home />} />
               <Route path="/wiki" element={<Wiki />} />
               <Route path="/wiki/:slug" element={<Wiki />} />
               <Route path="/community" element={<Community />} />
               <Route path="/community/post/:postId" element={<PostPage />} />
               <Route path="/login" element={<Login />} />
+              <Route path="/contact" element={<Contact />} />
+              <Route path="/claims" element={<Claims />} />
               <Route path="/profile" element={<Profile />} />
               <Route path="/profile/:uid" element={<Profile />} />
               <Route path="/new" element={<NewPost />} />
@@ -45,6 +50,7 @@ function App() {
               <Route path="/challenge/arithmetic" element={<ArithmeticGame />} />
               <Route path="/challenge/function-ball" element={<FunctionBallGame />} />
               <Route path="/archive" element={<ProblemArchive />} />
+              <Route path="/archive/:dateKey" element={<ProblemArchive />} />
               <Route path="/admin-claim" element={<AdminClaim />} />
               {/* Back-compat */}
               <Route path="/test" element={<Navigate to="/challenge" replace />} />

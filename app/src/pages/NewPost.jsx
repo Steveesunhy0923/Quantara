@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { auth, db, functions, storage } from '../lib/firebase'
+import { auth, db, storage } from '../lib/firebase'
 import { addDoc, collection, doc, getDoc, limit, onSnapshot, orderBy, query, serverTimestamp, setDoc, Timestamp, updateDoc } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { httpsCallable } from 'firebase/functions'
+import { getCallable } from '../lib/callable.js'
 import { formatFirebaseError } from '../lib/errors.js'
 import { DEFAULT_AVATAR_URL } from '../lib/placeholders.js'
 
@@ -127,10 +127,8 @@ export default function NewPost(){
       // Announcements are server-only (created via Cloud Function) so they show as "Quantara Team".
       let postRef = null
       if (form.channel === 'announcement'){
-        if ((usr.data()?.username || '') !== 'stevesunhy'){
-          throw new Error('Only stevesunhy can post announcements.')
-        }
-        const fn = httpsCallable(functions, 'adminCreateAnnouncementPost')
+        // Server enforces permissions; keep client error message generic.
+        const fn = getCallable('adminCreateAnnouncementPost')
         const res = await fn({
           title: base.title,
           post: base.post,

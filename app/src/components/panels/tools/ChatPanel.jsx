@@ -11,6 +11,22 @@ import GroupAvatar from '../../chat/GroupAvatar.jsx'
 import { formatFirebaseError } from '../../../lib/errors.js'
 import { DEFAULT_AVATAR_URL } from '../../../lib/placeholders.js'
 
+const SYSTEM_TEAM_NAME = 'Quantara Team'
+const SYSTEM_TEAM_AVATAR =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+      <defs>
+        <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#0ea5e9"/>
+          <stop offset="1" stop-color="#22c55e"/>
+        </linearGradient>
+      </defs>
+      <rect width="64" height="64" rx="32" fill="url(#g)"/>
+      <text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" font-size="22" font-family="system-ui" fill="white" font-weight="800">Q</text>
+    </svg>`
+  )
+
 function dmChatId(a, b){
   const [x, y] = [String(a), String(b)].sort()
   return `dm_${x}_${y}`
@@ -366,8 +382,9 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
     if (!user) return []
     const s = String(search || '').trim().toLowerCase()
     const rows = chats.map(c=>{
+      const isSystem = String(c.kind || '') === 'system'
       const others = (Array.isArray(c.participants) ? c.participants : []).filter(u=>u && u !== user.uid)
-      const other = others[0] || null
+      const other = isSystem ? null : (others[0] || null)
       const kind = String(c.lastMessageKind || '')
       const last =
         String(c.lastMessage || '').trim()
@@ -378,8 +395,8 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
       return {
         ...c,
         otherUid: other,
-        otherUsername: other ? (profiles[other]?.username || 'anon') : 'group',
-        otherPhotoURL: other ? (profiles[other]?.photoURL || null) : null,
+        otherUsername: isSystem ? (String(c.title || '').trim() || SYSTEM_TEAM_NAME) : (other ? (profiles[other]?.username || 'anon') : 'group'),
+        otherPhotoURL: isSystem ? SYSTEM_TEAM_AVATAR : (other ? (profiles[other]?.photoURL || null) : null),
         unread: Number(c.unreadCounts?.[user.uid] || 0),
         _lastMessageText: last,
       }
@@ -565,6 +582,9 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
     if (!chatId) return { ok: false, reason: 'Missing chatId' }
     // If the chat doc doesn't exist or we can't read it (permission-denied), `threadChat` stays null.
     if (!threadChat) return { ok: false, reason: 'Chat not found or you no longer have access.' }
+    if (String(threadChat?.kind || '') === 'system'){
+      return { ok: false, reason: 'This is a system chat (read-only).' }
+    }
     const ps = Array.isArray(threadChat?.participants) ? threadChat.participants.map(String) : []
     if (!ps.includes(user.uid)) return { ok: false, reason: 'You are not a participant in this chat.' }
     return { ok: true }
@@ -704,8 +724,9 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
 
   if (mode === 'thread' && chatId){
     const isGroup = String(threadChat?.kind || '') === 'group'
+    const isSystem = String(threadChat?.kind || '') === 'system'
     const other = (!isGroup) ? (otherUid || (Array.isArray(threadChat?.participants) ? threadChat.participants.find(u=>u && u !== user.uid) : null)) : null
-    const otherName = isGroup ? (threadChat?.title || 'Group chat') : (other ? (profiles[other]?.username || 'anon') : 'chat')
+    const otherName = isSystem ? (threadChat?.title || SYSTEM_TEAM_NAME) : (isGroup ? (threadChat?.title || 'Group chat') : (other ? (profiles[other]?.username || 'anon') : 'chat'))
     const lastMine = [...messages].reverse().find(m=>m.senderUid === user.uid) || null
     const otherLastRead = other ? threadChat?.lastReadAt?.[other] : null
     const otherLastReadMs = otherLastRead?.toMillis ? otherLastRead.toMillis() : null
@@ -745,9 +766,18 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
               <GroupAvatar urls={collageUrls} size={32} />
             )
           ) : (
-            <img src={other ? (profiles[other]?.photoURL || DEFAULT_AVATAR_URL) : DEFAULT_AVATAR_URL} alt="" style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}} />
+            <img
+              src={isSystem ? SYSTEM_TEAM_AVATAR : (other ? (profiles[other]?.photoURL || DEFAULT_AVATAR_URL) : DEFAULT_AVATAR_URL)}
+              alt=""
+              style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}}
+            />
           )}
-          <div style={{fontWeight:900}}>{otherName}</div>
+          <div style={{minWidth:0}}>
+            <div style={{fontWeight:900, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{otherName}</div>
+            {isSystem && (
+              <div style={{color:'#666', fontSize:'.85rem'}}>Official messages (read-only)</div>
+            )}
+          </div>
           {isGroup && (
             <span style={{color:'#666', fontSize:'.9rem'}}>
               {(Array.isArray(threadChat?.participants) ? threadChat.participants.length : 0)} members
@@ -881,6 +911,31 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
                       <button type="button" onClick={()=>forwardMessage(m)} title="Forward" style={{border:'none',background:'transparent',cursor:'pointer',color: mine ? '#fff' : '#111'}}>
                         ↪
                       </button>
+                      {!mine && String(threadChat?.kind || '') !== 'system' && (
+                        <button
+                          type="button"
+                          onClick={()=>{
+                            openPanel('report', {
+                              title: 'Report message',
+                              props: {
+                                targetType: 'chat',
+                                target: { chatId, messageId: m.id, senderUid: m.senderUid || null },
+                                suggestedText:
+                                  kind === 'text' ? String(m.text || '').slice(0, 240)
+                                  : kind === 'image' ? '[Image]'
+                                  : kind === 'post' ? `Post: ${String(m.postTitle || m.postId || '').slice(0, 120)}`
+                                  : kind === 'wiki' ? `Wiki: ${String(m.wikiTitle || m.wikiSlug || '').slice(0, 120)}`
+                                  : '[Message]',
+                              },
+                              pushHistory: true,
+                            })
+                          }}
+                          title="Report message"
+                          style={{border:'none',background:'transparent',cursor:'pointer',color: mine ? '#fff' : '#111'}}
+                        >
+                          🚩
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -930,15 +985,23 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
             style={{display:'none'}}
             onChange={onPickImage}
           />
-          <button type="button" onClick={()=>fileInputRef.current?.click()} title="Pick a photo">📷</button>
+          <button
+            type="button"
+            onClick={()=>fileInputRef.current?.click()}
+            title={isSystem ? 'System chats are read-only' : 'Pick a photo'}
+            disabled={isSystem}
+          >
+            📷
+          </button>
           <input
             value={msgText}
             onChange={e=>setMsgText(e.target.value)}
-            placeholder="Type a message…"
+            placeholder={isSystem ? 'System chat is read-only' : 'Type a message…'}
             style={{flex:1}}
             onKeyDown={(e)=>{ if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendMessage() } }}
+            disabled={isSystem}
           />
-          <button type="button" onClick={sendMessage}>Send</button>
+          <button type="button" onClick={sendMessage} disabled={isSystem}>Send</button>
         </div>
       </div>
     )

@@ -62,6 +62,16 @@ function normalizeAnswer(s){
   return String(s || '').trim().toLowerCase();
 }
 
+function assertLevelKey(v){
+  const raw = String(v || '').trim().toLowerCase()
+  // Canonical keys for daily challenges.
+  const ok = ['apprentice','journeyman','scholar','grandmaster']
+  if (!ok.includes(raw)){
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid levelKey')
+  }
+  return raw
+}
+
 function addDaysDateKey(dateKey, deltaDays){
   const [y, m, d] = dateKey.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d));
@@ -136,6 +146,45 @@ function decryptConcepts({ conceptsCiphertext, conceptsIv, conceptsTag }){
     return Array.isArray(parsed) ? parsed : [];
   }catch{
     return [];
+  }
+}
+
+function encryptSource({ sourceName = '', sourceUrl = '' } = {}){
+  const name = String(sourceName || '').trim().slice(0, 120)
+  const url = String(sourceUrl || '').trim().slice(0, 500)
+  if (!name && !url){
+    return { sourceCiphertext: null, sourceIv: null, sourceTag: null }
+  }
+  const key = getChallengeKey();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const json = JSON.stringify({ sourceName: name, sourceUrl: url });
+  const ct = Buffer.concat([cipher.update(json, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return {
+    sourceCiphertext: ct.toString('base64'),
+    sourceIv: iv.toString('base64'),
+    sourceTag: tag.toString('base64'),
+  };
+}
+
+function decryptSource({ sourceCiphertext, sourceIv, sourceTag }){
+  if (!sourceCiphertext || !sourceIv || !sourceTag) return null;
+  const key = getChallengeKey();
+  const iv = Buffer.from(String(sourceIv), 'base64');
+  const tag = Buffer.from(String(sourceTag), 'base64');
+  const ct = Buffer.from(String(sourceCiphertext), 'base64');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  const pt = Buffer.concat([decipher.update(ct), decipher.final()]);
+  try{
+    const obj = JSON.parse(pt.toString('utf8')) || {};
+    const sourceName = String(obj.sourceName || '').trim().slice(0, 120)
+    const sourceUrl = String(obj.sourceUrl || '').trim().slice(0, 500)
+    if (!sourceName && !sourceUrl) return null
+    return { sourceName, sourceUrl }
+  }catch{
+    return null;
   }
 }
 
@@ -715,6 +764,9 @@ exports.challengeUpsertDaily = functions.https.onCall(async (data, context) => {
   const questionLatex = String(data?.questionLatex || '').trim();
   const hint = String(data?.hint || '').trim();
   const difficulty = String(data?.difficulty || '').trim();
+  const levelKey = assertLevelKey(data?.levelKey || difficulty || 'apprentice')
+  const sourceName = String(data?.sourceName || '').trim();
+  const sourceUrl = String(data?.sourceUrl || '').trim();
   const keyConcepts = Array.isArray(data?.keyConcepts) ? data.keyConcepts : [];
   const answer = normalizeAnswer(data?.answer);
 
@@ -724,16 +776,24 @@ exports.challengeUpsertDaily = functions.https.onCall(async (data, context) => {
   if (hint.length > 5000) throw new functions.https.HttpsError('invalid-argument', 'Hint too long');
   if (difficulty.length > 40) throw new functions.https.HttpsError('invalid-argument', 'Difficulty too long');
   if (keyConcepts.length > 3) throw new functions.https.HttpsError('invalid-argument', 'Max 3 key concepts');
+  if (sourceName.length > 120) throw new functions.https.HttpsError('invalid-argument', 'Source name too long');
+  if (sourceUrl.length > 500) throw new functions.https.HttpsError('invalid-argument', 'Source URL too long');
+  if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) throw new functions.https.HttpsError('invalid-argument', 'Source URL must start with http(s)://');
 
   const prof = await getUserProfile(auth.uid);
   const username = prof.username || 'anon';
   requireSteveUploader(username, context);
 
-  const ref = db.doc(`dailyChallenges/${dateKey}`);
+  const ref = db.doc(`dailyChallenges/${dateKey}/levels/${levelKey}`);
   const existing = await ref.get();
   const locked = existing.exists ? !!existing.data()?.locked : false;
+  const forceEdit = !!data?.force;
   if (existing.exists && locked){
+    if (forceEdit){
+      // allow admins to fix mistakes, but we keep an audit flag
+    } else {
     throw new functions.https.HttpsError('failed-precondition', 'Challenge is locked (has submissions); cannot edit');
+    }
   }
 
   // Time window:
@@ -749,24 +809,28 @@ exports.challengeUpsertDaily = functions.https.onCall(async (data, context) => {
       .filter(Boolean)
       .slice(0, 3)
   );
+  const sourceEnc = encryptSource({ sourceName, sourceUrl });
   await ref.set({
     dateKey,
+    levelKey,
     imageURL,
     questionLatex,
     hint,
     difficulty,
     ...enc,
     ...conceptsEnc,
+    ...sourceEnc,
     publishAt,
     deadlineAt,
     locked: false,
     createdBy: auth.uid,
     createdByUsername: username,
+    editedAfterLock: (existing.exists && locked && forceEdit) ? true : false,
     updatedAt: FieldValue.serverTimestamp(),
     createdAt: existing.exists ? (existing.data()?.createdAt || FieldValue.serverTimestamp()) : FieldValue.serverTimestamp(),
   }, { merge: true });
 
-  return { ok: true, dateKey };
+  return { ok: true, dateKey, levelKey };
 });
 
 // Submit answer for today's challenge.
@@ -775,6 +839,7 @@ exports.challengeUpsertDaily = functions.https.onCall(async (data, context) => {
 exports.challengeSubmitDaily = functions.https.onCall(async (data, context) => {
   const auth = requireAuth(context);
   const dateKey = assertDateKey(data?.dateKey || todayKeyNY());
+  const levelKey = assertLevelKey(data?.levelKey || 'apprentice')
   const answerRaw = String(data?.answer || '').trim();
   const answer = normalizeAnswer(answerRaw);
   const usedHint = !!data?.usedHint;
@@ -784,25 +849,28 @@ exports.challengeSubmitDaily = functions.https.onCall(async (data, context) => {
   const prof = await getUserProfile(auth.uid);
   const username = prof.username || 'anon';
 
-  const challengeRef = db.doc(`dailyChallenges/${dateKey}`);
-  const submissionRef = db.doc(`dailyChallenges/${dateKey}/submissions/${auth.uid}`);
+  const challengeRef = db.doc(`dailyChallenges/${dateKey}/levels/${levelKey}`);
+  const submissionRef = db.doc(`dailyChallenges/${dateKey}/levels/${levelKey}/submissions/${auth.uid}`);
+  const pickRef = db.doc(`dailyChallenges/${dateKey}/userPicks/${auth.uid}`);
 
   const result = await db.runTransaction(async (tx) => {
-    const [challengeSnap, submissionSnap] = await Promise.all([
+    const [challengeSnap, submissionSnap, pickSnap] = await Promise.all([
       tx.get(challengeRef),
       tx.get(submissionRef),
+      tx.get(pickRef),
     ]);
 
     if (!challengeSnap.exists){
       throw new functions.https.HttpsError('failed-precondition', 'No challenge posted yet');
     }
-    if (submissionSnap.exists){
-      return {
-        ok: true,
-        dateKey,
-        alreadySubmitted: true,
-      };
+    if (pickSnap.exists){
+      const prev = pickSnap.data() || {}
+      const prevLevel = String(prev.levelKey || '').toLowerCase()
+      if (prevLevel && prevLevel !== levelKey){
+        throw new functions.https.HttpsError('failed-precondition', 'You already picked a different difficulty for today');
+      }
     }
+    const isUpdate = submissionSnap.exists;
 
     const ch = challengeSnap.data() || {};
 
@@ -841,10 +909,20 @@ exports.challengeSubmitDaily = functions.https.onCall(async (data, context) => {
       points = isCorrect ? 100 : (conceptHit ? 60 : 0);
     }
 
+    const existingSub = submissionSnap.exists ? (submissionSnap.data() || {}) : {};
+    const firstSubmittedAt =
+      submissionSnap.exists
+        ? (existingSub.firstSubmittedAt || existingSub.submittedAt || FieldValue.serverTimestamp())
+        : FieldValue.serverTimestamp();
+    const prevCorrectAt = existingSub.correctAt || null
+    const correctAt = (isCorrect && !prevCorrectAt) ? FieldValue.serverTimestamp() : prevCorrectAt
+
     tx.set(submissionRef, {
       uid: auth.uid,
       username,
+      firstSubmittedAt,
       submittedAt: FieldValue.serverTimestamp(),
+      correctAt,
       answer: answerRaw.slice(0, 400),
       answerNorm: answer,
       conceptsGuess: guessNorm,
@@ -855,17 +933,35 @@ exports.challengeSubmitDaily = functions.https.onCall(async (data, context) => {
       revealAt: deadlineAt,
     }, { merge: true });
 
-    // Lock the challenge once the first submission arrives (prevents editing the prompt/answer).
+    // Record the user's difficulty pick for the day (enforces "one difficulty per day").
+    tx.set(pickRef, {
+      uid: auth.uid,
+      dateKey,
+      levelKey,
+      pickedAt: pickSnap.exists ? (pickSnap.data()?.pickedAt || FieldValue.serverTimestamp()) : FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true })
+
+    // Lock THIS level once the first submission arrives (prevents editing that prompt/answer).
     if (!ch.locked){
       tx.set(challengeRef, { locked: true }, { merge: true });
     }
 
     // Do NOT reveal correctness/points to the client before the deadline.
-    return { ok:true, dateKey, submitted:true, alreadySubmitted:false, revealAt: deadlineAt.toMillis() };
+    return {
+      ok:true,
+      dateKey,
+      levelKey,
+      submitted:true,
+      updated: isUpdate,
+      // Keep this for backwards compat with older clients.
+      alreadySubmitted: false,
+      revealAt: deadlineAt.toMillis()
+    };
   });
 
   // Gamification: first submission for the day counts as participation.
-  if (!result?.alreadySubmitted){
+  if (!result?.updated){
     const ref = gameRefFor(auth.uid)
     const eventRef = db.collection(`users/${auth.uid}/xpEvents`).doc()
     let potdCount = 0
@@ -904,14 +1000,20 @@ exports.challengeSubmitDaily = functions.https.onCall(async (data, context) => {
 exports.challengeRevealDaily = functions.https.onCall(async (data, context) => {
   const auth = requireAuth(context);
   const dateKey = assertDateKey(data?.dateKey || todayKeyNY());
+  const requestedLevelKey = String(data?.levelKey || '').trim().toLowerCase()
 
   const prof = await getUserProfile(auth.uid);
   const username = prof.username || 'anon';
 
-  const challengeRef = db.doc(`dailyChallenges/${dateKey}`);
-  const submissionRef = db.doc(`dailyChallenges/${dateKey}/submissions/${auth.uid}`);
-  const statsRef = db.doc(`challengeStats/${auth.uid}`);
-  const dayRef = db.doc(`challengeStats/${auth.uid}/days/${dateKey}`);
+  const pickRef = db.doc(`dailyChallenges/${dateKey}/userPicks/${auth.uid}`);
+  const pickSnap = await pickRef.get()
+  const pickedLevelKey = pickSnap.exists ? String((pickSnap.data() || {}).levelKey || '').toLowerCase() : ''
+  const levelKey = assertLevelKey(requestedLevelKey || pickedLevelKey || 'apprentice')
+
+  const challengeRef = db.doc(`dailyChallenges/${dateKey}/levels/${levelKey}`);
+  const submissionRef = db.doc(`dailyChallenges/${dateKey}/levels/${levelKey}/submissions/${auth.uid}`);
+  const statsRef = db.doc(`challengeStatsLevels/${levelKey}/users/${auth.uid}`);
+  const dayRef = db.doc(`challengeStatsLevels/${levelKey}/users/${auth.uid}/days/${dateKey}`);
 
   const out = await db.runTransaction(async (tx) => {
     const [chSnap, subSnap, statsSnap, daySnap] = await Promise.all([
@@ -926,10 +1028,10 @@ exports.challengeRevealDaily = functions.https.onCall(async (data, context) => {
     const deadlineAt = ch.deadlineAt || nyLocalToTimestamp(addDaysDateKey(dateKey, 1), 19, 0, 0, 0);
     const now = admin.firestore.Timestamp.now();
     if (now.toMillis() < deadlineAt.toMillis()){
-      return { ok:true, dateKey, status:'pending', revealAt: deadlineAt.toMillis() };
+      return { ok:true, dateKey, levelKey, status:'pending', revealAt: deadlineAt.toMillis() };
     }
     if (!subSnap.exists){
-      return { ok:true, dateKey, status:'no-submission' };
+      return { ok:true, dateKey, levelKey, status:'no-submission' };
     }
 
     const sub = subSnap.data() || {};
@@ -937,33 +1039,110 @@ exports.challengeRevealDaily = functions.https.onCall(async (data, context) => {
     const usedHint = !!sub.usedHint;
     const conceptHit = !!sub.conceptHit;
     const points = Number(sub.points || 0);
+    const source = decryptSource(ch) || null
+
+    // Rank-based score for leaderboard:
+    // - Only correct submissions are ranked.
+    // - Earlier correctAt wins.
+    // - Daily score is percentile in [0,100], averaged across days.
+    let rank = null
+    let nCorrect = 0
+    let score = 0
+    if (isCorrect){
+      // Avoid requiring Firestore composite indexes by fetching and sorting in memory (daily volume should be modest).
+      const qs = await db.collection(`dailyChallenges/${dateKey}/levels/${levelKey}/submissions`).get()
+      const rows = []
+      for (const d of qs.docs){
+        const r = d.data() || {}
+        if (!r.isCorrect) continue
+        const t = r.correctAt || r.submittedAt || null
+        const ms = t?.toMillis ? t.toMillis() : null
+        if (!ms) continue
+        rows.push({ uid: d.id, ms })
+      }
+      rows.sort((a,b)=> (a.ms - b.ms) || String(a.uid).localeCompare(String(b.uid)))
+      nCorrect = rows.length
+      rank = rows.findIndex(r=>r.uid === auth.uid) + 1
+      if (rank <= 0) rank = null
+      if (nCorrect <= 1){
+        score = 100
+      } else if (rank){
+        score = Math.round((100 * (nCorrect - rank) / (nCorrect - 1)) * 10) / 10
+      }
+    }
 
     // Apply to public leaderboard once (per user per day).
     if (!daySnap.exists){
       const prev = statsSnap.exists ? (statsSnap.data() || {}) : {};
       const prevDays = Number(prev.daysParticipated || 0);
-      const prevTotal = Number(prev.totalPoints || 0);
+      const prevTotal = Number(prev.totalScore || 0);
       const daysParticipated = prevDays + 1;
-      const totalPoints = prevTotal + points;
-      const avgPoints = daysParticipated > 0 ? (totalPoints / daysParticipated) : 0;
+      const totalScore = prevTotal + Number(score || 0);
+      const avgScore = daysParticipated > 0 ? (totalScore / daysParticipated) : 0;
 
-      tx.set(dayRef, { dateKey, points, revealedAt: FieldValue.serverTimestamp() }, { merge: true });
+      tx.set(dayRef, {
+        dateKey,
+        score,
+        rank,
+        nCorrect,
+        rawPoints: points,
+        revealedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
       tx.set(statsRef, {
         uid: auth.uid,
         username,
         daysParticipated,
-        totalPoints,
-        avgPoints,
+        totalScore,
+        avgScore,
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
+
+      // Coins: minted ONLY via daily challenge participation (once/day).
+      // This rewards the user for having a submission and revealing after the deadline.
+      const coinDelta = 1
+      const gameRef = db.doc(`users/${auth.uid}/gameState/main`)
+      const gSnap = await tx.get(gameRef)
+      const g = gSnap.exists ? (gSnap.data() || {}) : {}
+      const oldCoins = (Number.isFinite(Number(g.coins)) && Number(g.coins) >= 0) ? Math.trunc(Number(g.coins)) : 0
+      const nextCoins = Math.max(0, Math.min(2_000_000_000, oldCoins + coinDelta))
+      const oldEarned = (Number.isFinite(Number(g.coinsEarned)) && Number(g.coinsEarned) >= 0) ? Math.trunc(Number(g.coinsEarned)) : 0
+      tx.set(gameRef, {
+        uid: auth.uid,
+        coins: nextCoins,
+        coinsEarned: Math.max(0, Math.min(2_000_000_000, oldEarned + coinDelta)),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true })
     }
 
     tx.set(submissionRef, { revealedAt: FieldValue.serverTimestamp() }, { merge: true });
 
-    return { ok:true, dateKey, status:'revealed', isCorrect, points, usedHint, conceptHit };
+    return { ok:true, dateKey, levelKey, status:'revealed', isCorrect, points, usedHint, conceptHit, score, rank, nCorrect, source };
   });
 
   return out;
+});
+
+// Public (post-deadline) source for the daily problem.
+// This is safe to expose after the deadline to prevent "source" from enabling cheating.
+exports.challengeGetDailySource = functions.https.onCall(async (data, context) => {
+  const dateKey = assertDateKey(data?.dateKey || todayKeyNY());
+  const levelKey = assertLevelKey(data?.levelKey || 'apprentice')
+  const ref = db.doc(`dailyChallenges/${dateKey}/levels/${levelKey}`);
+  const snap = await ref.get();
+  if (!snap.exists){
+    return { ok:true, dateKey, levelKey, status:'no-problem' };
+  }
+  const ch = snap.data() || {};
+  const deadlineAt = ch.deadlineAt || nyLocalToTimestamp(addDaysDateKey(dateKey, 1), 19, 0, 0, 0);
+  const now = admin.firestore.Timestamp.now();
+  if (now.toMillis() < deadlineAt.toMillis()){
+    return { ok:true, dateKey, levelKey, status:'pending', revealAt: deadlineAt.toMillis() };
+  }
+  const source = decryptSource(ch);
+  if (!source){
+    return { ok:true, dateKey, levelKey, status:'none' };
+  }
+  return { ok:true, dateKey, levelKey, status:'ok', source };
 });
 
 // Set admin custom claim for the current user if they know the secret
@@ -1032,6 +1211,79 @@ exports.wikiDelete = functions.https.onCall(async (data, context) => {
   await db.collection('articles').doc(id).delete();
   return { ok: true };
 });
+
+// -----------------------------
+// Wiki: difficulty rating aggregates
+// -----------------------------
+// Each user can submit one rating per article:
+// articles/{articleId}/difficultyRatings/{uid} -> { rating: number (0..100), updatedAt, createdAt? }
+// This trigger maintains aggregate fields on the parent article doc:
+// - ratingSum: number
+// - ratingCount: number
+// - ratingAvg: number (0..100)
+// - ratingUpdatedAt: timestamp
+exports.onWikiDifficultyRatingWrite = functions.firestore
+  .document('articles/{articleId}/difficultyRatings/{uid}')
+  .onWrite(async (change, ctx) => {
+    const articleId = String(ctx.params?.articleId || '')
+    if (!articleId) return
+
+    const before = change.before.exists ? (change.before.data() || {}) : null
+    const after = change.after.exists ? (change.after.data() || {}) : null
+
+    function parseRating(x){
+      const n = Number(x)
+      if (!Number.isFinite(n)) return null
+      if (n < 0 || n > 100) return null
+      return n
+    }
+
+    const rBefore = before ? parseRating(before.rating) : null
+    const rAfter = after ? parseRating(after.rating) : null
+
+    // If data is malformed, ignore (rules should prevent this, but stay defensive).
+    if (before && rBefore === null) return
+    if (after && rAfter === null) return
+
+    let deltaCount = 0
+    let deltaSum = 0
+
+    if (!before && after){
+      deltaCount = 1
+      deltaSum = rAfter || 0
+    } else if (before && !after){
+      deltaCount = -1
+      deltaSum = -(rBefore || 0)
+    } else if (before && after){
+      deltaCount = 0
+      deltaSum = (rAfter || 0) - (rBefore || 0)
+    }
+
+    if (!deltaCount && !deltaSum) return
+
+    const ref = db.doc(`articles/${articleId}`)
+
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref)
+      const data = snap.exists ? (snap.data() || {}) : {}
+
+      const oldSum = Number(data.ratingSum)
+      const oldCount = Number(data.ratingCount)
+      const sum0 = Number.isFinite(oldSum) ? oldSum : 0
+      const count0 = Number.isFinite(oldCount) ? oldCount : 0
+
+      const sum1 = Math.max(0, sum0 + deltaSum)
+      const count1 = Math.max(0, count0 + deltaCount)
+      const avg1 = count1 > 0 ? (sum1 / count1) : 0
+
+      tx.set(ref, {
+        ratingSum: sum1,
+        ratingCount: count1,
+        ratingAvg: avg1,
+        ratingUpdatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true })
+    })
+  })
 
 // -----------------------------
 // Community: one-like-per-user + counters via subcollections
@@ -1282,6 +1534,200 @@ exports.onPostStarDeleted = functions.firestore
     const { postId } = ctx.params;
     await db.doc(`communityPosts/${postId}`).set({ starCount: FieldValue.increment(-1) }, { merge: true });
   });
+
+// -----------------------------
+// Community: bounties (Q&A)
+// -----------------------------
+// Stored on communityPosts/{postId}:
+// - bountyStatus: 'open'|'awarded' (missing => none)
+// - bountyTotal: int (coins)
+// - bountyEscrow: int (coins remaining to award; becomes 0 after award)
+// - bountyCreatedAt, bountyAwardedAt: timestamps
+// - bountyCreatedBy, bountyAwardedBy: uid
+// - bountyAllocations: [{ uid, pct, coins }]
+
+function coinsFromGameDoc(d){
+  const n = Number(d?.coins)
+  if (!Number.isFinite(n) || n < 0) return 0
+  return clampInt(n, 0, 2_000_000_000)
+}
+
+function parseAllocations(raw){
+  const out = []
+  const seen = new Set()
+  if (!Array.isArray(raw)) return out
+  for (const a of raw){
+    const uid = String(a?.uid || '').trim()
+    if (!uid || seen.has(uid)) continue
+    const pct = clampInt(a?.pct, 0, 100)
+    if (pct <= 0) continue
+    seen.add(uid)
+    out.push({ uid, pct })
+    if (out.length >= 10) break
+  }
+  return out
+}
+
+function splitCoinsByPercent(total, alloc){
+  const t = clampInt(total, 0, 2_000_000_000)
+  if (!t) return []
+  // base floor allocation + remainder distribution
+  const rows = alloc.map(a=>{
+    const exact = (t * a.pct) / 100
+    const floor = Math.floor(exact)
+    return { uid: a.uid, pct: a.pct, coins: floor, frac: exact - floor }
+  })
+  let used = rows.reduce((s,r)=>s + r.coins, 0)
+  let rem = t - used
+  rows.sort((a,b)=> (b.frac - a.frac) || String(a.uid).localeCompare(String(b.uid)))
+  for (let i = 0; i < rows.length && rem > 0; i++){
+    rows[i].coins += 1
+    rem -= 1
+  }
+  rows.sort((a,b)=> (b.pct - a.pct) || String(a.uid).localeCompare(String(b.uid)))
+  return rows.map(({ uid, pct, coins })=>({ uid, pct, coins }))
+}
+
+exports.bountySet = functions.https.onCall(async (data, context) => {
+  const auth = requireAuth(context)
+  const postId = String(data?.postId || '').trim()
+  const amount = clampInt(data?.amount, 0, 1_000_000)
+  if (!postId) throw new functions.https.HttpsError('invalid-argument', 'Missing postId')
+  if (!amount) throw new functions.https.HttpsError('invalid-argument', 'amount must be a positive integer')
+
+  const postRef = db.doc(`communityPosts/${postId}`)
+  const gameRef = gameRefFor(auth.uid)
+
+  return await db.runTransaction(async (tx)=>{
+    const [pSnap, gSnap] = await Promise.all([tx.get(postRef), tx.get(gameRef)])
+    if (!pSnap.exists) throw new functions.https.HttpsError('not-found', 'Post not found')
+    const p = pSnap.data() || {}
+    if (String(p.bigCategory || '') !== 'Q&A'){
+      throw new functions.https.HttpsError('failed-precondition', 'Bounties are only supported for Q&A posts')
+    }
+    if (String(p.author || '') !== auth.uid){
+      throw new functions.https.HttpsError('permission-denied', 'Only the post author can set a bounty')
+    }
+    const status = String(p.bountyStatus || '')
+    if (status === 'open' || status === 'awarded'){
+      throw new functions.https.HttpsError('failed-precondition', 'This post already has a bounty')
+    }
+
+    const g = gSnap.exists ? (gSnap.data() || {}) : {}
+    const oldCoins = coinsFromGameDoc(g)
+    if (oldCoins < amount){
+      throw new functions.https.HttpsError('failed-precondition', 'Not enough coins')
+    }
+    const nextCoins = oldCoins - amount
+
+    tx.set(gameRef, {
+      uid: auth.uid,
+      coins: nextCoins,
+      coinsSpent: clampInt(g.coinsSpent, 0, 2_000_000_000) + amount,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true })
+
+    tx.set(postRef, {
+      bountyStatus: 'open',
+      bountyTotal: amount,
+      bountyEscrow: amount,
+      bountyCreatedAt: FieldValue.serverTimestamp(),
+      bountyCreatedBy: auth.uid,
+      bountyAllocations: [],
+    }, { merge: true })
+
+    return { ok: true, postId, bountyTotal: amount, coins: nextCoins }
+  })
+})
+
+exports.bountyAward = functions.https.onCall(async (data, context) => {
+  const auth = requireAuth(context)
+  const postId = String(data?.postId || '').trim()
+  if (!postId) throw new functions.https.HttpsError('invalid-argument', 'Missing postId')
+  const allocations = parseAllocations(data?.allocations)
+  if (!allocations.length) throw new functions.https.HttpsError('invalid-argument', 'allocations must be a non-empty array')
+  const pctSum = allocations.reduce((s,a)=>s + a.pct, 0)
+  if (pctSum !== 100) throw new functions.https.HttpsError('invalid-argument', 'allocations pct must sum to 100')
+
+  // Eligibility: must have commented on the post (simple proxy for "participated").
+  const eligible = new Set()
+  {
+    const snap = await db.collection('comments').where('postId','==',postId).limit(500).get()
+    for (const d of snap.docs){
+      const uid = String((d.data() || {}).author || '')
+      if (uid) eligible.add(uid)
+    }
+  }
+
+  const postRef = db.doc(`communityPosts/${postId}`)
+
+  const res = await db.runTransaction(async (tx)=>{
+    const pSnap = await tx.get(postRef)
+    if (!pSnap.exists) throw new functions.https.HttpsError('not-found', 'Post not found')
+    const p = pSnap.data() || {}
+    if (String(p.bigCategory || '') !== 'Q&A'){
+      throw new functions.https.HttpsError('failed-precondition', 'Bounties are only supported for Q&A posts')
+    }
+    if (String(p.author || '') !== auth.uid){
+      throw new functions.https.HttpsError('permission-denied', 'Only the post author can award the bounty')
+    }
+    if (String(p.bountyStatus || '') !== 'open'){
+      throw new functions.https.HttpsError('failed-precondition', 'No open bounty on this post')
+    }
+    const escrow = clampInt(p.bountyEscrow, 0, 2_000_000_000)
+    if (!escrow) throw new functions.https.HttpsError('failed-precondition', 'Bounty escrow is empty')
+
+    for (const a of allocations){
+      if (a.uid === auth.uid){
+        throw new functions.https.HttpsError('failed-precondition', 'Cannot award bounty to yourself')
+      }
+      if (!eligible.has(a.uid)){
+        throw new functions.https.HttpsError('failed-precondition', 'All recipients must have commented on the post')
+      }
+    }
+
+    const finalAlloc = splitCoinsByPercent(escrow, allocations)
+    for (const a of finalAlloc){
+      const gr = gameRefFor(a.uid)
+      const gSnap = await tx.get(gr)
+      const g = gSnap.exists ? (gSnap.data() || {}) : {}
+      const oldCoins = coinsFromGameDoc(g)
+      tx.set(gr, {
+        uid: a.uid,
+        coins: clampInt(oldCoins + a.coins, 0, 2_000_000_000),
+        coinsEarned: clampInt(g.coinsEarned, 0, 2_000_000_000) + a.coins,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true })
+    }
+
+    tx.set(postRef, {
+      bountyStatus: 'awarded',
+      bountyEscrow: 0,
+      bountyAwardedAt: FieldValue.serverTimestamp(),
+      bountyAwardedBy: auth.uid,
+      bountyAllocations: finalAlloc,
+    }, { merge: true })
+
+    return {
+      ok: true,
+      postId,
+      bountyTotal: clampInt(p.bountyTotal, 0, 2_000_000_000),
+      allocations: finalAlloc,
+    }
+  })
+
+  // Best-effort recipient notifications (outside tx)
+  try{
+    const title = String((await postRef.get()).data()?.title || '').slice(0, 180)
+    await Promise.allSettled(
+      (res.allocations || []).map(a => sendSystemDm(a.uid, `You received ${a.coins} coin(s) from a bounty on "${title}".`))
+    )
+  }catch(_e){
+    // ignore
+  }
+
+  return res
+})
 
 // -----------------------------
 // Arithmetic game attempts (arithmetic.html)
@@ -1928,6 +2374,9 @@ exports.gamificationEnsure = functions.https.onCall(async (_data, context) => {
         xp: minXp,
         level: levelFromXp(minXp),
         equippedBadgeId: '',
+        coins: 0,
+        coinsEarned: 0,
+        coinsSpent: 0,
         postsCount: 0,
         commentsCount: 0,
         likesReceived: 0,
@@ -1946,6 +2395,9 @@ exports.gamificationEnsure = functions.https.onCall(async (_data, context) => {
       xp,
       level: Math.max(level, levelFromXp(xp)),
       equippedBadgeId: typeof d.equippedBadgeId === 'string' ? d.equippedBadgeId : '',
+      coins: clampInt(d.coins, 0, 2_000_000_000),
+      coinsEarned: clampInt(d.coinsEarned, 0, 2_000_000_000),
+      coinsSpent: clampInt(d.coinsSpent, 0, 2_000_000_000),
       postsCount: clampInt(d.postsCount, 0, 2_000_000_000),
       commentsCount: clampInt(d.commentsCount, 0, 2_000_000_000),
       likesReceived: clampInt(d.likesReceived, 0, 2_000_000_000),
@@ -1957,7 +2409,13 @@ exports.gamificationEnsure = functions.https.onCall(async (_data, context) => {
 
   const snap = await ref.get()
   const d = snap.data() || {}
-  return { ok: true, xp: d.xp || 0, level: (typeof d.level === 'number' ? d.level : 0), equippedBadgeId: d.equippedBadgeId || '' }
+  return {
+    ok: true,
+    xp: d.xp || 0,
+    level: (typeof d.level === 'number' ? d.level : 0),
+    equippedBadgeId: d.equippedBadgeId || '',
+    coins: clampInt(d.coins, 0, 2_000_000_000),
+  }
 })
 
 exports.gamificationAddXp = functions.https.onCall(async (data, context) => {

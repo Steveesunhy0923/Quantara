@@ -9,13 +9,13 @@ export default function Challenge(){
       <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))', gap:12, marginTop:16}}>
         <GameCard
           title="Daily Problem"
-          desc="A new challenge every day. First 100 correct get points."
+          desc="A new challenge every day. Pick one difficulty; faster correct = higher rank score."
           to="/challenge/daily"
           cta="Play Daily"
         />
         <GameCard
           title="Leaderboard"
-          desc="Average points across all participation days (min 5 days)."
+          desc="Separate leaderboards per difficulty (min 5 days). Rank-based average score."
           to="/challenge/leaderboard"
           cta="View Leaderboard"
         />

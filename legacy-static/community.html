@@ -78,6 +78,7 @@
     window.addEventListener('DOMContentLoaded', function(){
         const auth = firebase.auth();
         const db   = firebase.firestore();
+        // Dev note: this legacy page is kept for reference; prefer the React app routes under /app.
 
         /* ---------- auth ui ----------- */
         const loginBtn  = document.getElementById('login-btn');
@@ -161,9 +162,17 @@
 
             card.querySelector('.like-btn').onclick=async()=>{
                 if(!auth.currentUser){alert('Login first');return;}
-                await db.runTransaction(async t=>{
-                    const s=await t.get(doc.ref); const cur=s.data().likes||0; t.update(doc.ref,{likes:cur+1});
-                });
+                // Rules no longer allow clients to update `communityPosts.likes` directly.
+                // New model: one like doc per user at communityPosts/{postId}/likes/{uid}.
+                const uid = auth.currentUser.uid;
+                const likeRef = db.doc(`communityPosts/${doc.id}/likes/${uid}`);
+                const likeSnap = await likeRef.get();
+                if (likeSnap.exists){
+                    await likeRef.delete();
+                } else {
+                    await likeRef.set({ createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+                }
+                // UI count is maintained by Cloud Functions in production; legacy page may lag until next snapshot.
             };
 
             if(canDel){

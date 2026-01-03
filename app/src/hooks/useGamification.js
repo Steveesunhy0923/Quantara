@@ -7,8 +7,10 @@ function shapeGameState(d){
   const xp = Number(d?.xp || 0) || 0
   const level = Number(d?.level || 0) || 0
   const equippedBadgeId = String(d?.equippedBadgeId || '')
+  const coins = Number(d?.coins || 0) || 0
   const safeLevel = Math.max(0, Math.trunc(level))
   const safeXp = Math.max(0, Math.trunc(xp))
+  const safeCoins = Math.max(0, Math.trunc(coins))
   const curLevelXp = xpForLevel(safeLevel)
   const nextLevelXp = xpForLevel(safeLevel + 1)
   const progress = nextLevelXp > curLevelXp ? (safeXp - curLevelXp) / (nextLevelXp - curLevelXp) : 0
@@ -16,6 +18,7 @@ function shapeGameState(d){
     xp: safeXp,
     level: Math.max(safeLevel, levelFromXp(safeXp)),
     equippedBadgeId,
+    coins: safeCoins,
     curLevelXp,
     nextLevelXp,
     progress: Math.max(0, Math.min(1, progress)),

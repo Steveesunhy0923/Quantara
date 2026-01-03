@@ -7,7 +7,7 @@ import { onAuthStateChanged } from 'firebase/auth'
 import { deleteObject, ref as storageRef } from 'firebase/storage'
 import { usePanels } from '../components/panels/PanelsContext.jsx'
 import { sendPostMessage } from '../lib/chat.js'
-import { adminDeletePost } from '../lib/moderation.js'
+import { adminDeleteComment, adminDeletePost } from '../lib/moderation.js'
 import { formatFirebaseError } from '../lib/errors.js'
 import { DEFAULT_AVATAR_URL } from '../lib/placeholders.js'
 
@@ -474,6 +474,7 @@ function PostCard({ post, onLike, onToggleStar, isStarred, starPending, isSteveA
   const [commentIndexUrl, setCommentIndexUrl] = useState('')
   const [authorCache, setAuthorCache] = useState({}) // uid -> { username, photoURL }
   const navigate = useNavigate()
+  const { openPanel } = usePanels()
   useEffect(()=>{
     if (!ref.current) return
     ref.current.innerHTML = `\n      <div class="post-body">${latexMarkupToHTML(post.post||'')}</div>\n    `
@@ -604,8 +605,18 @@ function PostCard({ post, onLike, onToggleStar, isStarred, starPending, isSteveA
 
   async function deleteComment(c){
     if (!auth.currentUser){ window.alert('Login first'); return }
-    if (auth.currentUser.uid !== c.author){ window.alert('You can only delete your own comments.'); return }
     if (!window.confirm('Delete this comment?')) return
+    // Allow stevesunhy (admin) to delete any comment and notify the author via system chat.
+    if (auth.currentUser.uid !== c.author){
+      if (!isSteveAdmin){
+        window.alert('You can only delete your own comments.')
+        return
+      }
+      const reason = window.prompt('Reason for deletion (optional):', '') || ''
+      await adminDeleteComment(c.id, reason)
+      window.alert('Comment deleted (user notified).')
+      return
+    }
     await deleteDoc(doc(db, 'comments', c.id))
   }
 
@@ -620,8 +631,27 @@ function PostCard({ post, onLike, onToggleStar, isStarred, starPending, isSteveA
   return (
     <article className="post-card">
       <div style={{display:'flex',alignItems:'center',gap:'.4rem',marginBottom:'.3rem'}}>
-        <img src={post.authorPhoto||DEFAULT_AVATAR_URL} style={{width:24,height:24,borderRadius:'50%'}} />
-        <span className="author">{post.authorName||'anon'}</span>
+        <button
+          type="button"
+          onClick={()=>post.author && navigate(`/profile/${post.author}`)}
+          style={{padding:0,border:'none',background:'transparent',cursor:post.author?'pointer':'default'}}
+          title="View profile"
+          aria-label="View author profile"
+        >
+          <img
+            src={post.authorPhoto||DEFAULT_AVATAR_URL}
+            alt=""
+            style={{width:24,height:24,borderRadius:'50%',objectFit:'cover',border:'1px solid #ddd'}}
+          />
+        </button>
+        <button
+          type="button"
+          onClick={()=>post.author && navigate(`/profile/${post.author}`)}
+          style={{padding:0,border:'none',background:'transparent',cursor:post.author?'pointer':'default',fontWeight:700}}
+          title="View profile"
+        >
+          {post.authorName||'anon'}
+        </button>
       </div>
       <h3 style={{cursor:'pointer'}} onClick={onOpenPost} title="Open post">{post.title}</h3>
       <small>
@@ -725,6 +755,23 @@ function PostCard({ post, onLike, onToggleStar, isStarred, starPending, isSteveA
         <button type="button" onClick={onOpenPost} title="Open post in panel">↗</button>
         <button type="button" onClick={onOpenPermalink} title="Open post page">🔗</button>
         <button type="button" onClick={onSendToChat} title="Send to chat">✉</button>
+        <button
+          type="button"
+          onClick={()=>{
+            openPanel('report', {
+              title: 'Report post',
+              props: {
+                targetType: 'post',
+                target: { postId: post.id, authorUid: post.author || null },
+                suggestedText: `${post.title || ''}\n\n${String(post.post || '').slice(0, 240)}`,
+              },
+              pushHistory: true,
+            })
+          }}
+          title="Report post"
+        >
+          🚩
+        </button>
         <span style={{marginLeft:'auto'}}>
           {canDelete && (
             <button type="button" className="del-btn" onClick={onDelete} aria-label="Delete post">

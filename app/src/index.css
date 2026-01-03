@@ -86,3 +86,42 @@ nav#topbar a:hover{background:#424242;border-radius:4px;}
 .controls .edit{background:#ffb300;color:#000;}
 .controls .delete{background:#e53935;color:#fff;}
 textarea#editor{width:100%;height:55vh;font-family:monospace;font-size:1rem;}
+
+/* -----------------------------
+   Wiki: right-side "Trench of Mathematics"
+   (fill the otherwise-empty space created by #content's max-width)
+   ----------------------------- */
+#wiki-page{
+  align-items: stretch;
+}
+
+#wiki-page #content{
+  /* Within the wiki page, the main reading area should take ~2/3 of remaining width. */
+  flex: 2 1 0;
+  min-width: 0;
+  width: auto;
+  max-width: none;
+  /* Let the page scroll normally; fixes TikZ/layout issues from nested scrolling containers. */
+  overflow-y: visible;
+}
+
+#wiki-trench{
+  /* Iceberg panel should take ~1/3 of remaining width. */
+  flex: 1 1 0;
+  min-width: 240px;
+  border-left: 1px solid #eee;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Sticky "slider" behavior: right panel stays visible while the user scrolls articles. */
+  position: sticky;
+  top: var(--topbar-h);
+  height: calc(100vh - var(--topbar-h));
+}
+
+@media (max-width: 980px){
+  /* On smaller screens, keep the wiki as 2 columns (sidebar + content). */
+  #wiki-trench{ display: none; }
+  #wiki-page #content{ flex: 1 1 auto; width: auto; }
+}
