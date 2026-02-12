@@ -5,7 +5,8 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Quantara · Math & Science</title>
-    <link rel="stylesheet" type="text/css" href="https://tikzjax.com/v1/fonts.css">
+    <!-- TikZJax fonts (self-hosted to avoid adblock/CSP/3rd-party failures) -->
+    <link rel="stylesheet" type="text/css" href="/vendor/tikz/fonts.css">
     <script>
       window.MathJax = {
         tex: {
@@ -17,8 +18,8 @@
       };
     </script>
     <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-    <!-- TikZ renderer (vendored; the previous jsDelivr URL was 404 so TikZJax never loaded) -->
-    <script defer src="/vendor/tikz/tikzjax.js"></script>
+    <!-- TikZ renderer (self-hosted TikZJax v1 + its wasm/data assets in /public) -->
+    <script defer src="/vendor/tikz/tikzjax.v1.js"></script>
   </head>
   <body>
     <div id="root">

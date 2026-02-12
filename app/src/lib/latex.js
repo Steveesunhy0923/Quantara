@@ -54,7 +54,8 @@ export function latexMarkupToHTML(src){
   }
   const protectedTikz = protectExistingTikzScripts(src)
   protectedTikz.out = protectedTikz.out.replace(
-    /\\begin\{tikzpicture\}[\s\S]*?\\end\{tikzpicture\}/g,
+    // Allow optional options: \begin{tikzpicture}[...]
+    /\\begin\{tikzpicture\}(?:\[[^\]]*\])?[\s\S]*?\\end\{tikzpicture\}/g,
     (tikz)=>`<script type="text/tikz">\n${tikz}\n</script>`
   )
   src = restoreTikzScripts(protectedTikz.out, protectedTikz.scripts)
@@ -209,6 +210,51 @@ export async function renderLatex(container){
       // If MathJax isn't ready yet, skip; next render will try again.
     }
   }
+
+  async function ensureTikzRuntime(){
+    // If the CDN (tikzjax.com) is blocked (common with adblock/privacy/CSP),
+    // TikZ blocks will exist but window.TikzJax won't. In that case, load our
+    // vendored bundle from /public/vendor/tikz/tikzjax.js as a fallback.
+    if (window.TikzJax || typeof window.tikzLoad === 'function' || typeof window.process_tikz === 'function'){
+      return
+    }
+    if (window.__ensureTikzRuntimePromise) return window.__ensureTikzRuntimePromise
+    window.__ensureTikzRuntimePromise = new Promise((resolve)=>{
+      try{
+        const existing = document.querySelector('script[data-quantara-tikz="vendor"]')
+        if (existing) { resolve(); return }
+        const s = document.createElement('script')
+        // Self-hosted TikZJax v1 bundle (and its wasm/data assets) live under /public.
+        s.src = '/vendor/tikz/tikzjax.v1.js'
+        s.async = true
+        s.defer = true
+        s.dataset.quantaraTikz = 'vendor'
+        s.onload = ()=>{
+          // TikZJax v1's upstream bundle hides its renderer behind `window.onload = async function(){...}`
+          // (it doesn't export `window.TikzJax`). Capture it so our SPA can re-run it for newly
+          // inserted <script type="text/tikz"> blocks.
+          try{
+            const fn = window.onload
+            if (!window.__tikzjaxProcessAll && typeof fn === 'function'){
+              const src = String(fn)
+              if (src.includes('text/tikz') && (src.includes('getElementsByTagName') || src.includes('script'))){
+                window.__tikzjaxProcessAll = fn
+              }
+            }
+          }catch(_e){}
+          resolve()
+        }
+        s.onerror = ()=>resolve()
+        document.head.appendChild(s)
+      }catch(_e){
+        resolve()
+      }
+    })
+    return window.__ensureTikzRuntimePromise
+  }
+
+  await ensureTikzRuntime()
+
   const TJ = window.TikzJax
   // TikZJax: ensure it's initialized (some builds expose tikzLoad()) and then process new scripts.
   try{
@@ -230,6 +276,28 @@ export async function renderLatex(container){
       for (const s of scripts){
         try{ await window.process_tikz(s) }catch(_e){}
       }
+      return
+    }
+  }catch(_e){}
+
+  // Fallback for official TikZJax v1: it doesn't expose a public API, but its internal pipeline
+  // is attached to window.onload and scans the whole document for <script type="text/tikz"> nodes.
+  try{
+    // Prefer our patched v1 bundle which exposes a stable API:
+    if (window.TikzJax && typeof window.TikzJax.processAll === 'function'){
+      const hasTikz = !!container?.querySelector?.('script[type="text/tikz"]')
+      if (hasTikz){
+        const r = window.TikzJax.processAll(container)
+        if (r && typeof r.then === 'function') await r
+        return
+      }
+    }
+
+    const runAll = window.__tikzjaxProcessAll
+    const hasTikz = !!container?.querySelector?.('script[type="text/tikz"]')
+    if (hasTikz && typeof runAll === 'function'){
+      const r = runAll()
+      if (r && typeof r.then === 'function') await r
       return
     }
   }catch(_e){}
