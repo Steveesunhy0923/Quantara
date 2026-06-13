@@ -1,4 +1,4 @@
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
 import { collection, doc, getDoc, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { auth, db } from '../lib/firebase'
@@ -13,6 +13,7 @@ export default function Navbar(){
   const navigate = useNavigate()
   const { openPanel, isNarrow } = usePanels()
   const [unreadTotal, setUnreadTotal] = useState(0)
+  const [useFallbackChatOrder, setUseFallbackChatOrder] = useState(false)
   const game = useGamification(user?.uid || null)
 
   useEffect(()=>{
@@ -55,6 +56,12 @@ export default function Navbar(){
   useEffect(()=>{
     setUnreadTotal(0)
     if (!user) return
+    setUseFallbackChatOrder(false)
+  },[user?.uid])
+
+  useEffect(()=>{
+    setUnreadTotal(0)
+    if (!user) return
     // Best-effort unread total (for badge). Limit keeps it cheap.
     const ordered = query(
       collection(db, 'chats'),
@@ -77,13 +84,13 @@ export default function Navbar(){
       setUnreadTotal(total)
     }
 
-    let unsub = onSnapshot(ordered, compute, (err)=>{
-      unsub()
-      unsub = onSnapshot(fallback, compute, (_e)=>{})
+    const active = useFallbackChatOrder ? fallback : ordered
+    const unsub = onSnapshot(active, compute, (err)=>{
       void err
+      if (!useFallbackChatOrder) setUseFallbackChatOrder(true)
     })
     return ()=>unsub()
-  },[user])
+  },[user?.uid, useFallbackChatOrder])
 
   const badgeText = useMemo(()=>{
     if (!unreadTotal) return ''
@@ -92,12 +99,13 @@ export default function Navbar(){
 
   return (
     <nav id="topbar">
-      <Link to="/">Home</Link>
-      <Link to="/wiki">Wiki</Link>
-      <Link to="/challenge">Challenge</Link>
-      <Link to="/community">Community</Link>
-      <Link to="/archive">Problem&nbsp;Archive</Link>
-      {isSteveAdmin && <Link to="/claims">Claims</Link>}
+      <NavLink to="/" end className={({isActive})=>`topbar-link${isActive ? ' active' : ''}`}>Home</NavLink>
+      <NavLink to="/latex-learning" className={({isActive})=>`topbar-link featured${isActive ? ' active' : ''}`}>LaTeX Learning</NavLink>
+      <NavLink to="/wiki" className={({isActive})=>`topbar-link${isActive ? ' active' : ''}`}>Wiki</NavLink>
+      <NavLink to="/challenge" className={({isActive})=>`topbar-link${isActive ? ' active' : ''}`}>Challenge</NavLink>
+      <NavLink to="/community" className={({isActive})=>`topbar-link${isActive ? ' active' : ''}`}>Community</NavLink>
+      <NavLink to="/archive" className={({isActive})=>`topbar-link${isActive ? ' active' : ''}`}>Problem&nbsp;Archive</NavLink>
+      {isSteveAdmin && <NavLink to="/claims" className={({isActive})=>`topbar-link${isActive ? ' active' : ''}`}>Claims</NavLink>}
       <span style={{marginLeft:'auto'}} />
       {!user && (
         <button onClick={()=>navigate('/login')}>Login</button>

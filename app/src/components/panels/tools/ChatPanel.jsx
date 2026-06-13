@@ -67,6 +67,7 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
   const [friendships, setFriendships] = useState([]) // raw friendship docs
   const [chats, setChats] = useState([])
   const [profiles, setProfiles] = useState({}) // uid -> { username, photoURL }
+  const [useFallbackChatOrder, setUseFallbackChatOrder] = useState(false)
 
   // Thread state
   const [threadChat, setThreadChat] = useState(null)
@@ -93,6 +94,11 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
     const unsub = onAuthStateChanged(auth, (u)=>setUser(u))
     return ()=>unsub()
   },[])
+
+  useEffect(()=>{
+    // Reset ordering fallback when switching users.
+    setUseFallbackChatOrder(false)
+  },[user?.uid])
 
   // Close friend menu on outside click / Escape
   useEffect(()=>{
@@ -282,22 +288,18 @@ export default function ChatPanel({ mode = 'home', chatId = null, otherUid = nul
       limit(80)
     )
 
-    let unsub = onSnapshot(
-      ordered,
+    const active = useFallbackChatOrder ? fallback : ordered
+    const unsub = onSnapshot(
+      active,
       (qs)=>setChats(qs.docs.map(d=>({ id: d.id, ...d.data() }))),
       (err)=>{
         const msg = formatFirebaseError(err)
         setActionErr(msg)
-        unsub()
-        unsub = onSnapshot(
-          fallback,
-          (qs)=>setChats(qs.docs.map(d=>({ id: d.id, ...d.data() }))),
-          (err2)=>setActionErr(formatFirebaseError(err2))
-        )
+        if (!useFallbackChatOrder) setUseFallbackChatOrder(true)
       }
     )
     return ()=>unsub()
-  },[user])
+  },[user?.uid, useFallbackChatOrder])
 
   // Load profiles we need (friends + chat counterparts)
   useEffect(()=>{

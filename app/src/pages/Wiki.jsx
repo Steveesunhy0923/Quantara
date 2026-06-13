@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, orderBy, query, serverTimestamp, setDoc } from 'firebase/firestore'
 import { getIdTokenResult, onAuthStateChanged } from 'firebase/auth'
 import { auth, db } from '../lib/firebase'
-import { latexMarkupToHTML, renderLatex, slugify } from '../lib/latex'
+import { latexMarkupToHTML, renderLatexSoon, slugify } from '../lib/latex'
 import { usePanels } from '../components/panels/PanelsContext.jsx'
 import { useGamification } from '../hooks/useGamification.js'
 
@@ -17,6 +17,9 @@ export default function Wiki(){
   const containerRef = useRef(null)
   const [user, setUser] = useState(null)
   const [isAdmin, setIsAdmin] = useState(false)
+  const [hasIndex, setHasIndex] = useState(false)
+  const [useLegacyMeta, setUseLegacyMeta] = useState(false)
+  const [bodyLoading, setBodyLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [topTags, setTopTags] = useState([]) // [{tag, count}]
   const [myTags, setMyTags] = useState([])
@@ -58,51 +61,90 @@ export default function Wiki(){
   },[user])
 
   useEffect(()=>{
-    (async()=>{
+    let cancelled = false
+
+    function normalizeArticleDoc(d, data, { includeContent }){
+      let { title, content, slug: rawSlug, keywords, difficulty, ratingAvg, ratingCount } = (data || {})
+      // Normalize slugs so routing is stable even if historical docs stored percent-encoded slugs.
+      // react-router params are decoded; encoded slugs (with %xx) won't match unless we normalize.
+      let baseSlug = rawSlug || title || ''
+      try{
+        // best-effort decode if it looks encoded
+        if (typeof baseSlug === 'string' && baseSlug.includes('%')){
+          baseSlug = decodeURIComponent(baseSlug)
+        }
+      }catch(_e){}
+      let slug = slugify(baseSlug || title || '')
+      if (!slug) slug = slugify(title||'')
+
+      const diffNum = Number(difficulty)
+      const safeDifficulty =
+        Number.isFinite(diffNum) ? Math.min(100, Math.max(0, diffNum)) : 0
+      const avgNum = Number(ratingAvg)
+      const safeRatingAvg =
+        Number.isFinite(avgNum) ? Math.min(100, Math.max(0, avgNum)) : 0
+      const cntNum = Number(ratingCount)
+      const safeRatingCount =
+        Number.isFinite(cntNum) ? Math.max(0, Math.trunc(cntNum)) : 0
+
+      return {
+        id: d.id,
+        title,
+        content: includeContent ? (content||'') : (typeof content === 'string' ? content : undefined),
+        slug,
+        keywords: Array.isArray(keywords) ? keywords : [],
+        difficulty: safeDifficulty,
+        ratingAvg: safeRatingAvg,
+        ratingCount: safeRatingCount,
+      }
+    }
+
+    ;(async()=>{
+      // PERF: Prefer a lightweight index collection so we don't download all article bodies at startup.
+      // Fallback to legacy /articles if index is missing.
+      try{
+        const idx = await getDocs(query(collection(db, 'articlesIndex'), orderBy('title')))
+        if (cancelled) return
+        if (idx.docs.length > 0){
+          setHasIndex(true)
+          const used = new Set()
+          const arr = []
+          for (const d of idx.docs){
+            const a = normalizeArticleDoc(d, d.data(), { includeContent: false })
+            // Avoid slug collisions (same logic as legacy loader).
+            let slug = a.slug
+            if (used.has(slug)){
+              slug = `${slug}-${String(d.id || '').slice(0,6) || 'x'}`
+            }
+            used.add(slug)
+            arr.push({ ...a, slug })
+          }
+          setArticles(arr)
+          return
+        }
+      }catch(_e){
+        // ignore and fall back to legacy
+      }
+
+      setHasIndex(false)
       const qs = await getDocs(query(collection(db,'articles'), orderBy('title')))
+      if (cancelled) return
       const arr = []
       const used = new Set()
       for (const d of qs.docs){
         const data = d.data()
-        let { title, content, slug: rawSlug, keywords, difficulty, ratingAvg, ratingCount } = data
-        // Normalize slugs so routing is stable even if historical docs stored percent-encoded slugs.
-        // react-router params are decoded; encoded slugs (with %xx) won't match unless we normalize.
-        let baseSlug = rawSlug || title || ''
-        try{
-          // best-effort decode if it looks encoded
-          if (typeof baseSlug === 'string' && baseSlug.includes('%')){
-            baseSlug = decodeURIComponent(baseSlug)
-          }
-        }catch(_e){}
-        let slug = slugify(baseSlug || title || '')
-        if (!slug) slug = slugify(title||'')
+        const a0 = normalizeArticleDoc(d, data, { includeContent: true })
+        let slug = a0.slug
         if (used.has(slug)){
           // Avoid collisions in UI routing by suffixing with a stable token.
           slug = `${slug}-${String(d.id || '').slice(0,6) || 'x'}`
         }
         used.add(slug)
-        const diffNum = Number(difficulty)
-        const safeDifficulty =
-          Number.isFinite(diffNum) ? Math.min(100, Math.max(0, diffNum)) : 0
-        const avgNum = Number(ratingAvg)
-        const safeRatingAvg =
-          Number.isFinite(avgNum) ? Math.min(100, Math.max(0, avgNum)) : 0
-        const cntNum = Number(ratingCount)
-        const safeRatingCount =
-          Number.isFinite(cntNum) ? Math.max(0, Math.trunc(cntNum)) : 0
-        arr.push({
-          id:d.id,
-          title,
-          content: content||'',
-          slug,
-          keywords: Array.isArray(keywords) ? keywords : [],
-          difficulty: safeDifficulty,
-          ratingAvg: safeRatingAvg,
-          ratingCount: safeRatingCount,
-        })
+        arr.push({ ...a0, slug })
       }
       setArticles(arr)
     })()
+    return ()=>{ cancelled = true }
   },[])
 
   useEffect(()=>{
@@ -142,14 +184,50 @@ export default function Wiki(){
     if (!current || editing) return
     const el = containerRef.current
     if (!el) return
+    if (typeof current.content !== 'string' || !current.content){
+      el.innerHTML = `\n        <article>\n          <h1>${current.title||''}</h1>\n          <div style="color:#666;padding:6px 0;">Loading…</div>\n        </article>\n      `
+      return
+    }
     el.innerHTML = `\n      <article>\n        <h1>${current.title||''}</h1>\n        <div id="article-body">${latexMarkupToHTML(current.content||'')}</div>\n      </article>\n    `
-    renderLatex(el)
-    // Best-effort retries: MathJax/TikzJax can load after this render, especially on first navigation.
-    // Without retries, the page can look "unstyled" until a refresh.
-    const t1 = window.setTimeout(()=>{ try{ renderLatex(el) }catch(_e){} }, 350)
-    const t2 = window.setTimeout(()=>{ try{ renderLatex(el) }catch(_e){} }, 1200)
-    return ()=>{ window.clearTimeout(t1); window.clearTimeout(t2) }
   },[current, editing])
+
+  useEffect(()=>{
+    // Schedule typesetting after paint/idle so first paint isn't blocked by MathJax/TikZ.
+    if (!current || editing) return
+    const el = containerRef.current
+    if (!el) return
+    const cancel = renderLatexSoon(el, { timeout: 1800 })
+    return ()=>cancel()
+  },[current, editing])
+
+  useEffect(()=>{
+    // Load the full article body on demand when we're in index mode.
+    let cancelled = false
+    ;(async()=>{
+      if (!current?.id) return
+      if (editing) return
+      if (typeof current.content === 'string' && current.content.trim()) return
+      setBodyLoading(true)
+      try{
+        const snap = await getDoc(doc(db, 'articles', current.id))
+        if (cancelled) return
+        if (!snap.exists()){
+          setCurrent(prev=> (prev?.id === current.id ? { ...prev, content: '' } : prev))
+          return
+        }
+        const data = snap.data() || {}
+        const content = typeof data.content === 'string' ? data.content : ''
+        setCurrent(prev=> (prev?.id === current.id ? { ...prev, content } : prev))
+        // Update only this entry (we don't want to store all bodies in memory).
+        setArticles(prev=>prev.map(a=>a.id === current.id ? ({ ...a, content }) : a))
+      }catch(_e){
+        // ignore; UI keeps showing Loading… / placeholder.
+      }finally{
+        if (!cancelled) setBodyLoading(false)
+      }
+    })()
+    return ()=>{ cancelled = true }
+  },[current?.id, editing])
 
   // Highlight search matches (best-effort; avoid KaTeX nodes).
   // Separate effect so it re-runs as the user types, without re-rendering the whole article HTML.
@@ -268,8 +346,10 @@ export default function Wiki(){
     const fallback = clampDifficulty(current.ratingAvg ?? current.difficulty ?? 50)
     setRatingInput(fallback)
 
-    const artRef = doc(db, 'articles', current.id)
-    const unsubArticle = onSnapshot(artRef, (snap)=>{
+    // Reset meta fallback whenever switching articles or switching into/out of index mode.
+    setUseLegacyMeta(false)
+    const metaRef = doc(db, (hasIndex && !useLegacyMeta) ? 'articlesIndex' : 'articles', current.id)
+    const unsubArticle = onSnapshot(metaRef, (snap)=>{
       if (!snap.exists()) return
       const data = snap.data() || {}
       setCurrent(prev=>{
@@ -280,7 +360,19 @@ export default function Wiki(){
         const nextCount = Number.isFinite(nextCountRaw) ? Math.max(0, Math.trunc(nextCountRaw)) : 0
         return { ...prev, difficulty: nextDifficulty, ratingAvg: nextAvg, ratingCount: nextCount }
       })
-    }, (_e)=>{})
+      // Keep the list entry in sync so iceberg dots/tooltips update for the current article.
+      setArticles(prev=>prev.map(a=>{
+        if (a.id !== current.id) return a
+        const nextDifficulty = clampDifficulty(data.difficulty ?? a.difficulty ?? 0)
+        const nextAvg = clampDifficulty(data.ratingAvg ?? a.ratingAvg ?? 0)
+        const nextCountRaw = Number(data.ratingCount ?? a.ratingCount ?? 0)
+        const nextCount = Number.isFinite(nextCountRaw) ? Math.max(0, Math.trunc(nextCountRaw)) : 0
+        return { ...a, difficulty: nextDifficulty, ratingAvg: nextAvg, ratingCount: nextCount }
+      }))
+    }, (_e)=>{
+      // If index doc doesn't exist yet for this article, fall back to legacy /articles metadata.
+      if (hasIndex && !useLegacyMeta) setUseLegacyMeta(true)
+    })
 
     let unsubMine = ()=>{}
     if (auth.currentUser?.uid){
@@ -478,6 +570,20 @@ export default function Wiki(){
     }
     const art = { title, slug, content: `\\section*{${title}}\n`, keywords: [], difficulty }
     const ref = await addDoc(collection(db,'articles'), art)
+    // Maintain a lightweight index doc for fast listing without downloading full bodies.
+    try{
+      await setDoc(doc(db, 'articlesIndex', ref.id), {
+        title,
+        slug,
+        keywords: [],
+        difficulty,
+        ratingAvg: 0,
+        ratingCount: 0,
+      }, { merge: true })
+      setHasIndex(true)
+    }catch(_e){
+      // If rules don't allow index writes yet, ignore; the app will fall back to legacy listing.
+    }
     const newArt = { ...art, id: ref.id }
     const list = [...articles, newArt]
     setArticles(list)
@@ -492,6 +598,7 @@ export default function Wiki(){
     if (!canEdit){ window.alert('Wiki editing is unlocked at level 10.'); return }
     if (!window.confirm('Delete this article?')) return
     await deleteDoc(doc(db,'articles',current.id))
+    try{ await deleteDoc(doc(db,'articlesIndex',current.id)) }catch(_e){}
     const list = articles.filter(a=>a.id!==current.id)
     setArticles(list)
     if (list.length){ navigate(`/wiki/${encodeURIComponent(list[0].slug)}`) } else { navigate('/wiki') }
@@ -512,6 +619,18 @@ export default function Wiki(){
     }
     const next = { ...current, title, slug, keywords, content, difficulty }
     await setDoc(doc(db, 'articles', current.id), next, { merge: true })
+    // Update index doc (no content).
+    try{
+      await setDoc(doc(db, 'articlesIndex', current.id), {
+        title,
+        slug,
+        keywords,
+        difficulty,
+        ratingAvg: next.ratingAvg ?? 0,
+        ratingCount: next.ratingCount ?? 0,
+      }, { merge: true })
+      setHasIndex(true)
+    }catch(_e){}
     setArticles(prev => prev.map(a => a.id === current.id ? next : a))
     setCurrent(next)
     navigate(`/wiki/${encodeURIComponent(slug)}`)
@@ -527,6 +646,10 @@ export default function Wiki(){
     const difficulty = clampDifficulty(d)
     const next = { ...current, difficulty }
     await setDoc(doc(db, 'articles', current.id), { difficulty }, { merge: true })
+    try{
+      await setDoc(doc(db, 'articlesIndex', current.id), { difficulty }, { merge: true })
+      setHasIndex(true)
+    }catch(_e){}
     setArticles(prev => prev.map(a => a.id === current.id ? next : a))
     setCurrent(next)
   }
@@ -546,7 +669,8 @@ export default function Wiki(){
     const base = Array.isArray(articles) ? articles : []
     const filtered = !q ? base : base.filter(a=>{
       const title = String(a.title || '').toLowerCase()
-      const content = String(a.content || '').toLowerCase()
+      // In index mode we may not have `content` for most articles; avoid scanning bodies (perf).
+      const content = (typeof a.content === 'string' ? String(a.content) : '').toLowerCase()
       const kws = Array.isArray(a.keywords) ? a.keywords.join(' ').toLowerCase() : ''
       return title.includes(q) || kws.includes(q) || content.includes(q)
     })

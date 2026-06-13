@@ -4,7 +4,7 @@ import { getIdTokenResult, onAuthStateChanged } from 'firebase/auth'
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { collection, collectionGroup, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc } from 'firebase/firestore'
 import { auth, db, storage } from '../lib/firebase'
-import { latexMarkupToHTML, renderLatex } from '../lib/latex'
+import { latexMarkupToHTML, renderLatexSoon } from '../lib/latex'
 import { getCallable } from '../lib/callable.js'
 
 const LEVELS = [
@@ -59,10 +59,8 @@ function LatexView({ src = '' }){
       /\$[^$]+\$/.test(raw)
     const wrapped = hasDelims ? raw : `\\[${raw}\\]`
     el.innerHTML = latexMarkupToHTML(wrapped)
-    void renderLatex(el)
-    const t1 = window.setTimeout(()=>{ try{ void renderLatex(el) }catch(_e){} }, 350)
-    const t2 = window.setTimeout(()=>{ try{ void renderLatex(el) }catch(_e){} }, 1200)
-    return ()=>{ window.clearTimeout(t1); window.clearTimeout(t2) }
+    const cancel = renderLatexSoon(el, { timeout: 1800 })
+    return ()=>cancel()
   },[src])
   return <div ref={ref} />
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { doc, getDoc, onSnapshot } from 'firebase/firestore'
 import { auth, db } from '../../../lib/firebase.js'
-import { latexMarkupToHTML, renderLatex } from '../../../lib/latex.js'
+import { latexMarkupToHTML, renderLatexWhenVisible } from '../../../lib/latex.js'
 import CommentsPanel from './CommentsPanel.jsx'
 import { adminBanUser, adminDeletePost } from '../../../lib/moderation.js'
 
@@ -49,7 +49,8 @@ export default function PostPanel({ postId }){
     const el = document.getElementById(`post-body-${postId}`)
     if (!el) return
     el.innerHTML = `<div class="post-body">${latexMarkupToHTML(post.post || '')}</div>`
-    renderLatex(el)
+    const cancel = renderLatexWhenVisible(el, { rootMargin: '1200px 0px', timeout: 1200 })
+    return ()=>cancel()
   },[post, postId])
 
   const shareUrl = useMemo(()=>{

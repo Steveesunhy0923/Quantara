@@ -1,4 +1,4 @@
-import { initializeApp } from 'firebase/app'
+import { getApp, getApps, initializeApp } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
 import { getFunctions } from 'firebase/functions'
 import { doc, getDoc, getFirestore, setLogLevel as setFirestoreLogLevel } from 'firebase/firestore'
@@ -18,7 +18,23 @@ const firebaseConfig = {
   messagingSenderId: (import.meta?.env?.VITE_FIREBASE_MESSAGING_SENDER_ID ?? '').toString().trim() || undefined,
 }
 
-const app = initializeApp(firebaseConfig)
+const singleton = (() => {
+  try{
+    // Persist instances across Vite Fast Refresh / dev reloads to avoid duplicate init.
+    // eslint-disable-next-line no-undef
+    const g = globalThis
+    if (!g.__quantaraFirebaseSingleton) g.__quantaraFirebaseSingleton = {}
+    return g.__quantaraFirebaseSingleton
+  }catch(_e){
+    return {}
+  }
+})()
+
+const app = singleton.app || (()=>{
+  const a = getApps().length ? getApp() : initializeApp(firebaseConfig)
+  singleton.app = a
+  return a
+})()
 
 // -----------------------------
 // App Check (optional)
@@ -28,7 +44,7 @@ const app = initializeApp(firebaseConfig)
 // - Create a reCAPTCHA v3 key
 // - Add it as VITE_APPCHECK_RECAPTCHA_V3_SITE_KEY in your Hosting env/build env
 // - Redeploy
-let appCheck = null
+let appCheck = singleton.appCheck || null
 // Track the latest App Check status so UI can show actionable errors when enforcement blocks requests.
 const appCheckStatus = {
   enabled: false,
@@ -111,10 +127,13 @@ try{
       console.warn('[appCheck] Not initialized: invalid Firebase App ID:', appId)
     } else if (siteKey){
       appCheckStatus.siteKeyPrefix = `${String(siteKey).slice(0, 10)}…`
-      appCheck = initializeAppCheck(app, {
-        provider: new ReCaptchaV3Provider(siteKey),
-        isTokenAutoRefreshEnabled: true,
-      })
+      if (!appCheck){
+        appCheck = initializeAppCheck(app, {
+          provider: new ReCaptchaV3Provider(siteKey),
+          isTokenAutoRefreshEnabled: true,
+        })
+        singleton.appCheck = appCheck
+      }
       appCheckStatus.enabled = true
 
       // Best-effort: eagerly fetch a token so we can surface meaningful diagnostics if it fails.

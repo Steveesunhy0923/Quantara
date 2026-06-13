@@ -140,6 +140,74 @@ service cloud.firestore {
       allow delete: if canEditWiki();
     }
 
+    // Lightweight index for wiki listing (keeps article bodies out of the initial load).
+    // articlesIndex/{id} mirrors public metadata fields from /articles/{id} but MUST NOT contain `content`.
+    match /articlesIndex/{id} {
+      allow read: if true;
+
+      function safeDifficulty(d){
+        return (d is int || d is float) && d >= 0 && d <= 100;
+      }
+      function safeRatingAvg(v){
+        return (v is int || v is float) && v >= 0 && v <= 100;
+      }
+      function safeRatingCount(v){
+        return (v is int || v is float) && v >= 0 && v <= 1000000;
+      }
+      function safeTitle(t){
+        return t is string && t.size() > 0 && t.size() <= 120;
+      }
+      function safeSlug(s){
+        return s is string && s.size() > 0 && s.size() <= 120;
+      }
+
+      function safeKeywords(ks){
+        return (ks is list)
+          && ks.size() >= 0
+          && ks.size() <= 40;
+      }
+
+      function hasNoContent(){
+        return !('content' in request.resource.data);
+      }
+
+      function allowedKeys(){
+        return request.resource.data.keys().hasOnly(['title','slug','keywords','difficulty','ratingAvg','ratingCount']);
+      }
+
+      function difficultyChanged(){
+        return ('difficulty' in request.resource.data)
+          && (
+            !('difficulty' in resource.data)
+            || request.resource.data.difficulty != resource.data.difficulty
+          );
+      }
+
+      allow create: if canEditWiki()
+                    && hasNoContent()
+                    && allowedKeys()
+                    && ('title' in request.resource.data) && safeTitle(request.resource.data.title)
+                    && ('slug' in request.resource.data) && safeSlug(request.resource.data.slug)
+                    && (!('keywords' in request.resource.data) || safeKeywords(request.resource.data.keywords))
+                    && (!('difficulty' in request.resource.data) || safeDifficulty(request.resource.data.difficulty))
+                    && (!('ratingAvg' in request.resource.data) || safeRatingAvg(request.resource.data.ratingAvg))
+                    && (!('ratingCount' in request.resource.data) || safeRatingCount(request.resource.data.ratingCount));
+
+      allow update: if canEditWiki()
+                    && hasNoContent()
+                    && allowedKeys()
+                    // If difficulty changes, require admin claim.
+                    && (!difficultyChanged() || isAdmin())
+                    && (!('title' in request.resource.data) || safeTitle(request.resource.data.title))
+                    && (!('slug' in request.resource.data) || safeSlug(request.resource.data.slug))
+                    && (!('keywords' in request.resource.data) || safeKeywords(request.resource.data.keywords))
+                    && (!('difficulty' in request.resource.data) || safeDifficulty(request.resource.data.difficulty))
+                    && (!('ratingAvg' in request.resource.data) || safeRatingAvg(request.resource.data.ratingAvg))
+                    && (!('ratingCount' in request.resource.data) || safeRatingCount(request.resource.data.ratingCount));
+
+      allow delete: if canEditWiki();
+    }
+
     // -----------------------------
     // Wiki tags: per-user votes
     // articles/{id}/tagVotes/{uid} -> { tags: [string], updatedAt: timestamp }

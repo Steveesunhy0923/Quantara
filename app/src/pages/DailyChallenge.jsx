@@ -4,7 +4,7 @@ import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore'
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage'
 import { useParams } from 'react-router-dom'
 import { auth, db, storage } from '../lib/firebase'
-import { latexMarkupToHTML, renderLatex } from '../lib/latex'
+import { latexMarkupToHTML, renderLatexSoon } from '../lib/latex'
 import { getCallable } from '../lib/callable.js'
 
 function nyParts(){
@@ -250,11 +250,8 @@ export default function DailyChallenge(){
     // If the author didn't include delimiters but did use LaTeX commands, wrap as display math.
     const src = hasDelims ? raw : `\\[${raw}\\]`
     el.innerHTML = latexMarkupToHTML(src)
-    void renderLatex(el)
-    // Best-effort retries: MathJax can load after initial render.
-    const t1 = window.setTimeout(()=>{ try{ void renderLatex(el) }catch(_e){} }, 350)
-    const t2 = window.setTimeout(()=>{ try{ void renderLatex(el) }catch(_e){} }, 1200)
-    return ()=>{ window.clearTimeout(t1); window.clearTimeout(t2) }
+    const cancel = renderLatexSoon(el, { timeout: 1800 })
+    return ()=>cancel()
   },[challenge.exists, challenge.data?.questionLatex])
 
   useEffect(()=>{
@@ -267,10 +264,8 @@ export default function DailyChallenge(){
     }
     // Render answer as inline math by default.
     el.textContent = `\\(${a}\\)`
-    void renderLatex(el)
-    const t1 = window.setTimeout(()=>{ try{ void renderLatex(el) }catch(_e){} }, 350)
-    const t2 = window.setTimeout(()=>{ try{ void renderLatex(el) }catch(_e){} }, 1200)
-    return ()=>{ window.clearTimeout(t1); window.clearTimeout(t2) }
+    const cancel = renderLatexSoon(el, { timeout: 1800 })
+    return ()=>cancel()
   },[answer])
 
   // Uploader is admin-only and still requires the server-side allowlist.

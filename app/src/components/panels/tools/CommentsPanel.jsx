@@ -18,6 +18,9 @@ export default function CommentsPanel({ postId, postTitle }){
   const [indexUrl, setIndexUrl] = useState('')
   const [replyTo, setReplyTo] = useState(null) // { id, preview }
   const [isSteveAdmin, setIsSteveAdmin] = useState(false)
+  const [useFallback, setUseFallback] = useState(false)
+
+  useEffect(()=>{ setUseFallback(false) },[postId])
 
   useEffect(()=>{
     setLoadErr('')
@@ -39,27 +42,19 @@ export default function CommentsPanel({ postId, postTitle }){
       limit(200)
     )
 
-    let unsub = onSnapshot(
-      q,
+    const active = useFallback ? fallback : q
+    const unsub = onSnapshot(
+      active,
       (qs)=>setItems(qs.docs.map(d=>({ id:d.id, ...d.data() }))),
       (e)=>{
         const msg = e?.message || String(e)
         setLoadErr(msg)
         setIndexUrl(extractFirstUrl(msg))
-        unsub()
-        unsub = onSnapshot(
-          fallback,
-          (qs)=>setItems(qs.docs.map(d=>({ id:d.id, ...d.data() }))),
-          (e2)=>{
-            const msg2 = e2?.message || String(e2)
-            setLoadErr(msg2)
-            setIndexUrl(extractFirstUrl(msg2))
-          }
-        )
+        if (!useFallback) setUseFallback(true)
       }
     )
     return ()=>unsub()
-  },[postId])
+  },[postId, useFallback])
 
   useEffect(()=>{
     ;(async()=>{

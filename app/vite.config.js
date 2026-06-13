@@ -25,4 +25,19 @@ export default defineConfig({
     }
   })(),
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id){
+          if (!id) return
+          if (!id.includes('node_modules')) return
+          if (id.includes('firebase')) return 'firebase'
+          if (id.includes('react-router')) return 'router'
+          if (id.includes('react-dom')) return 'react'
+          if (id.includes('react')) return 'react'
+          return 'vendor'
+        },
+      },
+    },
+  },
 })

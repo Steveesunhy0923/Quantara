@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { addDoc, collection, deleteDoc, doc, getDoc, limit, onSnapshot, orderBy, query, serverTimestamp, setDoc, Timestamp, updateDoc, where } from 'firebase/firestore'
 import { db, auth, storage } from '../lib/firebase'
-import { latexMarkupToHTML, renderLatex } from '../lib/latex'
+import { latexMarkupToHTML, renderLatexWhenVisible } from '../lib/latex'
 import { onAuthStateChanged } from 'firebase/auth'
 import { deleteObject, ref as storageRef } from 'firebase/storage'
 import { usePanels } from '../components/panels/PanelsContext.jsx'
@@ -21,12 +21,13 @@ export default function Community(){
   const [user, setUser] = useState(null)
   const [selectedBig, setSelectedBig] = useState('Discussion')
   const [selectedChannel, setSelectedChannel] = useState('general')
-  const [expanded, setExpanded] = useState(()=>Object.fromEntries(BIG_CATEGORIES.map(c=>[c, c==='Discussion'])))
+  const [expanded, setExpanded] = useState(()=>Object.fromEntries(BIG_CATEGORIES.map(c=>[c, false])))
   const [levelFilters, setLevelFilters] = useState(new Set())
   const [subjectFilter, setSubjectFilter] = useState('')
   const [forums, setForums] = useState([]) // [{id,bigCategory,channel,deleted}]
   const [isSteveAdmin, setIsSteveAdmin] = useState(false)
   const [posts, setPosts] = useState([])
+  const [postLimit, setPostLimit] = useState(60)
   const [lightbox, setLightbox] = useState(null) // { urls: string[], index: number }
   const [actionErr, setActionErr] = useState('')
   const [starredSet, setStarredSet] = useState(new Set())
@@ -103,14 +104,17 @@ export default function Community(){
 
   useEffect(()=>{
     // Fetch recent posts; we filter client-side for richer filters.
-    const q = query(collection(db,'communityPosts'), orderBy('time','desc'), limit(200))
-    const unsub = onSnapshot(q, async (qs)=>{
+    // Keep the initial list modest; rendering/LaTeX typesetting can be expensive.
+    const q = query(collection(db,'communityPosts'), orderBy('time','desc'), limit(postLimit))
+    const unsub = onSnapshot(q, (qs)=>{
       const arr = []
       for (const d of qs.docs){ arr.push({ id:d.id, ...d.data(), _ref:d.ref }) }
       setPosts(arr)
+    }, (e)=>{
+      setActionErr(formatFirebaseError(e))
     })
     return () => unsub()
-  },[])
+  },[postLimit])
 
   const filteredPosts = useMemo(()=>{
     return posts.filter(p=>{
@@ -428,6 +432,13 @@ export default function Community(){
             onOpenImage={(urls, index)=>setLightbox({ urls, index })}
           />
         ))}
+        {posts.length >= postLimit && (
+          <div style={{padding:'12px 0'}}>
+            <button type="button" onClick={()=>setPostLimit(l=>Math.min(500, Number(l||0) + 50))}>
+              Load more
+            </button>
+          </div>
+        )}
       </section>
       {lightbox && (
         <Lightbox
@@ -472,16 +483,23 @@ function PostCard({ post, onLike, onToggleStar, isStarred, starPending, isSteveA
   const [commentErr, setCommentErr] = useState('')
   const [commentLoadErr, setCommentLoadErr] = useState('')
   const [commentIndexUrl, setCommentIndexUrl] = useState('')
+  const [useFallbackComments, setUseFallbackComments] = useState(false)
   const [authorCache, setAuthorCache] = useState({}) // uid -> { username, photoURL }
   const navigate = useNavigate()
   const { openPanel } = usePanels()
   useEffect(()=>{
-    if (!ref.current) return
-    ref.current.innerHTML = `\n      <div class="post-body">${latexMarkupToHTML(post.post||'')}</div>\n    `
-    renderLatex(ref.current)
+    const el = ref.current
+    if (!el) return
+    el.innerHTML = `\n      <div class="post-body">${latexMarkupToHTML(post.post||'')}</div>\n    `
+    const cancel = renderLatexWhenVisible(el, { rootMargin: '800px 0px', timeout: 1200 })
+    return ()=>cancel()
   },[post])
   const canDelete = !!auth.currentUser && (auth.currentUser.uid === post.author || !!isSteveAdmin)
   const canPin = !!auth.currentUser && auth.currentUser.uid === post.author
+
+  useEffect(()=>{
+    setUseFallbackComments(false)
+  },[post.id])
 
   useEffect(()=>{
     // Load top 2 comments for this post.
@@ -506,29 +524,21 @@ function PostCard({ post, onLike, onToggleStar, isStarred, starPending, isSteveA
       limit(2)
     )
 
-    let unsub = onSnapshot(
-      ranked,
+    const q = useFallbackComments ? fallback : ranked
+    const unsub = onSnapshot(
+      q,
       (qs)=>setTopComments(qs.docs.map(d=>({ id: d.id, ...d.data() }))),
       (err)=>{
         // Common: FAILED_PRECONDITION: The query requires an index.
         const msg = err?.message || String(err)
         setCommentLoadErr(msg)
         setCommentIndexUrl(extractFirstUrl(msg))
-        unsub()
-        unsub = onSnapshot(
-          fallback,
-          (qs)=>setTopComments(qs.docs.map(d=>({ id: d.id, ...d.data() }))),
-          (err2)=>{
-            const msg2 = err2?.message || String(err2)
-            setCommentLoadErr(msg2)
-            setCommentIndexUrl(extractFirstUrl(msg2))
-          }
-        )
+        if (!useFallbackComments) setUseFallbackComments(true)
       }
     )
 
     return ()=>unsub()
-  },[post.id])
+  },[post.id, useFallbackComments])
 
   async function submitComment(){
     if (!auth.currentUser){ window.alert('Login first'); return }

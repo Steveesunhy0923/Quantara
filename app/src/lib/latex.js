@@ -192,30 +192,171 @@ export function latexMarkupToHTML(src){
     .replace(/\\\\(?=\s|$)/g,'<br>')
 }
 
+function _looksLikeLatexOrTikz(container){
+  try{
+    if (!container) return false
+    // TikZ scripts are explicit and cheap to detect.
+    if (container.querySelector?.('script[type="text/tikz"]')) return true
+
+    // Heuristic for MathJax: avoid loading MathJax for plain text posts.
+    // We intentionally keep this cheap and permissive; false positives are OK.
+    const html = String(container.innerHTML || '')
+    if (html.includes('\\(') || html.includes('\\[') || html.includes('\\)') || html.includes('\\]')) return true
+    if (html.includes('$$')) return true
+    if (/\$[^$]+\$/.test(html)) return true
+    // Common LaTeX commands.
+    if (/\\(frac|sqrt|sum|prod|int|lim|cdot|times|pi|alpha|beta|gamma|theta|mathbb|mathbf|mathrm|begin|end)\b/.test(html)) return true
+  }catch(_e){}
+  return false
+}
+
+async function _ensureMathJaxRuntime(){
+  if (typeof window === 'undefined') return
+
+  // If MathJax is already fully loaded, we're done.
+  if (window.MathJax && typeof window.MathJax.typesetPromise === 'function') return
+  if (window.__ensureMathJaxRuntimePromise) return window.__ensureMathJaxRuntimePromise
+
+  window.__ensureMathJaxRuntimePromise = new Promise((resolve)=>{
+    try{
+      // Provide config BEFORE loading the script. Also: avoid auto-typesetting the whole document.
+      const existing = window.MathJax
+      const baseCfg = (existing && typeof existing === 'object' && !Array.isArray(existing)) ? existing : {}
+      window.MathJax = {
+        ...baseCfg,
+        tex: {
+          inlineMath: [['$','$'],['\\(','\\)']],
+          displayMath: [['$$','$$'],['\\[','\\]']],
+          // Common MathJax v3 package (AMS).
+          packages: { '[+]': ['ams'] },
+          ...(baseCfg.tex || {}),
+        },
+        options: {
+          skipHtmlTags: ['script','noscript','style','textarea','pre','code'],
+          ...(baseCfg.options || {}),
+        },
+        startup: {
+          typeset: false,
+          ...(baseCfg.startup || {}),
+        },
+      }
+
+      const existingScript = document.querySelector('script[data-quantara-mathjax="1"]')
+      if (existingScript){
+        // If another call inserted the script already, just wait a bit for startup to finish.
+        resolve()
+        return
+      }
+
+      const s = document.createElement('script')
+      s.async = true
+      s.dataset.quantaraMathjax = '1'
+      s.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js'
+      s.onload = ()=>resolve()
+      s.onerror = ()=>resolve()
+      document.head.appendChild(s)
+    }catch(_e){
+      resolve()
+    }
+  })
+
+  return window.__ensureMathJaxRuntimePromise
+}
+
+async function _ensureTikzFonts(){
+  if (typeof document === 'undefined') return
+  try{
+    if (document.querySelector('link[data-quantara-tikz-fonts="1"]')) return
+    const link = document.createElement('link')
+    link.rel = 'stylesheet'
+    link.type = 'text/css'
+    link.href = '/vendor/tikz/fonts.css'
+    link.dataset.quantaraTikzFonts = '1'
+    document.head.appendChild(link)
+  }catch(_e){}
+}
+
+export function renderLatexSoon(container, { timeout = 1200 } = {}){
+  if (typeof window === 'undefined') return ()=>{}
+  if (!container) return ()=>{}
+  let cancelled = false
+  const run = ()=>{
+    if (cancelled) return
+    try{ void renderLatex(container) }catch(_e){}
+  }
+
+  // Prefer idle time so first paint / interaction aren't blocked by typesetting.
+  if (typeof window.requestIdleCallback === 'function'){
+    const id = window.requestIdleCallback(run, { timeout })
+    return ()=>{ cancelled = true; try{ window.cancelIdleCallback?.(id) }catch(_e){} }
+  }
+  const t = window.setTimeout(run, 0)
+  return ()=>{ cancelled = true; window.clearTimeout(t) }
+}
+
+export function renderLatexWhenVisible(container, { rootMargin = '600px 0px', timeout = 1200 } = {}){
+  if (typeof window === 'undefined') return ()=>{}
+  if (!container) return ()=>{}
+
+  // No IntersectionObserver support: fall back to soon/idle.
+  if (typeof window.IntersectionObserver !== 'function'){
+    return renderLatexSoon(container, { timeout })
+  }
+
+  let cancelSoon = ()=>{}
+  let done = false
+  const obs = new window.IntersectionObserver((entries)=>{
+    if (done) return
+    for (const e of entries || []){
+      if (e && (e.isIntersecting || (e.intersectionRatio && e.intersectionRatio > 0))){
+        done = true
+        try{ obs.disconnect() }catch(_e){}
+        cancelSoon = renderLatexSoon(container, { timeout })
+        return
+      }
+    }
+  }, { root: null, rootMargin, threshold: 0.01 })
+
+  try{ obs.observe(container) }catch(_e){
+    // If observation fails, just run soon.
+    cancelSoon = renderLatexSoon(container, { timeout })
+  }
+
+  return ()=>{
+    try{ obs.disconnect() }catch(_e){}
+    try{ cancelSoon() }catch(_e){}
+  }
+}
+
 export async function renderLatex(container){
-  // Ensure MathJax runs first so inline math is converted, then invoke TikzJax
-  if (window.MathJax){
+  // Only load expensive runtimes if the container appears to contain LaTeX/TikZ.
+  if (!_looksLikeLatexOrTikz(container)) return
+
+  // Ensure MathJax runs first so inline math is converted, then invoke TikzJax.
+  try{
+    await _ensureMathJaxRuntime()
     // In MathJax v3, `window.MathJax` is first a config object, then the library replaces/augments it.
     // If we call typesetPromise too early, it will crash with "typesetPromise is not a function".
-    try{
-      if (window.MathJax?.startup?.promise) {
-        await window.MathJax.startup.promise
-      }
-      if (typeof window.MathJax?.typesetPromise === 'function') {
-        await window.MathJax.typesetPromise([container])
-      } else if (typeof window.MathJax?.typeset === 'function') {
-        window.MathJax.typeset([container])
-      }
-    }catch(_e){
-      // If MathJax isn't ready yet, skip; next render will try again.
+    if (window.MathJax?.startup?.promise) {
+      await window.MathJax.startup.promise
     }
+    if (typeof window.MathJax?.typesetPromise === 'function') {
+      await window.MathJax.typesetPromise([container])
+    } else if (typeof window.MathJax?.typeset === 'function') {
+      window.MathJax.typeset([container])
+    }
+  }catch(_e){
+    // Best-effort: ignore MathJax errors so they don't break the page.
   }
 
   async function ensureTikzRuntime(){
-    // If the CDN (tikzjax.com) is blocked (common with adblock/privacy/CSP),
-    // TikZ blocks will exist but window.TikzJax won't. In that case, load our
-    // vendored bundle from /public/vendor/tikz/tikzjax.js as a fallback.
-    if (window.TikzJax || typeof window.tikzLoad === 'function' || typeof window.process_tikz === 'function'){
+    // Load our vendored TikZJax v1 bundle on demand. It runs as an IIFE on script execution and
+    // exposes window.TikzJax.processAll(container) / window.TikzJax.process(script). Its TeX format
+    // (.gz) and engine (.wasm) are fetched from the site root, and the hashes the bundle requests
+    // (3f69….wasm / b565….gz) match the files vendored under app/public/. (The older
+    // /vendor/tikz/tikzjax.js bundle requested different hashes that were never vendored, which is
+    // why TikZ failed to render everywhere.)
+    if (typeof window.TikzJax?.processAll === 'function' || typeof window.TikzJax?.process === 'function'){
       return
     }
     if (window.__ensureTikzRuntimePromise) return window.__ensureTikzRuntimePromise
@@ -224,26 +365,10 @@ export async function renderLatex(container){
         const existing = document.querySelector('script[data-quantara-tikz="vendor"]')
         if (existing) { resolve(); return }
         const s = document.createElement('script')
-        // Self-hosted TikZJax v1 bundle (and its wasm/data assets) live under /public.
         s.src = '/vendor/tikz/tikzjax.v1.js'
         s.async = true
-        s.defer = true
         s.dataset.quantaraTikz = 'vendor'
-        s.onload = ()=>{
-          // TikZJax v1's upstream bundle hides its renderer behind `window.onload = async function(){...}`
-          // (it doesn't export `window.TikzJax`). Capture it so our SPA can re-run it for newly
-          // inserted <script type="text/tikz"> blocks.
-          try{
-            const fn = window.onload
-            if (!window.__tikzjaxProcessAll && typeof fn === 'function'){
-              const src = String(fn)
-              if (src.includes('text/tikz') && (src.includes('getElementsByTagName') || src.includes('script'))){
-                window.__tikzjaxProcessAll = fn
-              }
-            }
-          }catch(_e){}
-          resolve()
-        }
+        s.onload = ()=>resolve()
         s.onerror = ()=>resolve()
         document.head.appendChild(s)
       }catch(_e){
@@ -253,80 +378,34 @@ export async function renderLatex(container){
     return window.__ensureTikzRuntimePromise
   }
 
+  // Only load the TikZ runtime + fonts if there are TikZ blocks present.
+  const hasTikz = !!container?.querySelector?.('script[type="text/tikz"]')
+  if (!hasTikz) return
+
+  await _ensureTikzFonts()
   await ensureTikzRuntime()
 
-  const TJ = window.TikzJax
-  // TikZJax: ensure it's initialized (some builds expose tikzLoad()) and then process new scripts.
-  try{
-    if (typeof window.tikzLoad === 'function'){
-      // Initialize once; concurrent calls share the same promise.
-      if (!window.__tikzLoadPromise){
-        window.__tikzLoadPromise = window.tikzLoad().catch(()=>null)
-      }
-      await window.__tikzLoadPromise
-    }
-  }catch(_e){}
-
-  // Preferred path for our vendored legacy TikZJax build: it exposes window.process_tikz(element)
-  // which converts a <script type="text/tikz">...</script> into an SVG container.
-  try{
-    if (typeof window.process_tikz === 'function' && container){
-      const scripts = Array.from(container.querySelectorAll?.('script[type="text/tikz"]') || [])
-      // Process sequentially (renderer is wasm-heavy and the legacy code expects a chain).
-      for (const s of scripts){
-        try{ await window.process_tikz(s) }catch(_e){}
-      }
-      return
-    }
-  }catch(_e){}
-
-  // Fallback for official TikZJax v1: it doesn't expose a public API, but its internal pipeline
-  // is attached to window.onload and scans the whole document for <script type="text/tikz"> nodes.
-  try{
-    // Prefer our patched v1 bundle which exposes a stable API:
-    if (window.TikzJax && typeof window.TikzJax.processAll === 'function'){
-      const hasTikz = !!container?.querySelector?.('script[type="text/tikz"]')
-      if (hasTikz){
-        const r = window.TikzJax.processAll(container)
-        if (r && typeof r.then === 'function') await r
-        return
-      }
-    }
-
-    const runAll = window.__tikzjaxProcessAll
-    const hasTikz = !!container?.querySelector?.('script[type="text/tikz"]')
-    if (hasTikz && typeof runAll === 'function'){
-      const r = runAll()
-      if (r && typeof r.then === 'function') await r
-      return
-    }
-  }catch(_e){}
-
-  if (TJ){
-    // TikZJax API differs across builds; support common entrypoints.
+  // The vendored renderer keeps a single in-memory TeX instance (shared module state), so two
+  // renders running at once would clobber each other's memory. Serialize every render through one
+  // global queue. Within a container, processAll already renders its scripts sequentially.
+  const processTikz = async ()=>{
+    const scripts = Array.from(container.querySelectorAll?.('script[type="text/tikz"]') || [])
+    if (!scripts.length) return
     try{
-      if (typeof TJ.render === 'function'){
-        const r = TJ.render(container)
-        if (r && typeof r.then === 'function') await r
-        return
-      }
-      if (typeof TJ.process === 'function'){
-        // Some versions accept an element; others process the whole document.
-        try{
-          const r = TJ.process(container)
-          if (r && typeof r.then === 'function') await r
-        }catch(_e){
-          const r2 = TJ.process()
-          if (r2 && typeof r2.then === 'function') await r2
+      if (typeof window.TikzJax?.processAll === 'function'){
+        await window.TikzJax.processAll(container)
+      } else if (typeof window.TikzJax?.process === 'function'){
+        for (const s of scripts){
+          try{ await window.TikzJax.process(s) }catch(_e){}
         }
-        return
-      }
-      if (typeof TJ.typeset === 'function'){
-        const r = TJ.typeset(container)
-        if (r && typeof r.then === 'function') await r
       }
     }catch(_e){
-      // Best-effort: ignore TikZ errors so they don't break MathJax rendering.
+      // Best-effort: never let a TikZ failure break the rest of the page.
     }
   }
+
+  // .then(fn, fn) keeps the chain alive even if a prior render rejected.
+  const queue = (window.__tikzRenderQueue || Promise.resolve()).then(processTikz, processTikz)
+  window.__tikzRenderQueue = queue
+  await queue
 }
